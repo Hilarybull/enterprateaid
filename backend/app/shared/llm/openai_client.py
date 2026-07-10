@@ -304,7 +304,7 @@ async def get_user_plan_info(user_id: str) -> tuple[str, str]:
 
 
 async def pick_llm_for_user(user_id: str) -> LLMClient:
-    """Free/trial → OpenAI (gpt-4.1-mini). Starter → Claude. Pro+ → Claude."""
+    """Free/trial → OpenAI (gpt-4.1-mini). Paid → Claude (claude-3-5-sonnet). No fallback."""
     plan_key, status = await get_user_plan_info(user_id)
     is_free = plan_key in _FREE_PLAN_KEYS or status in {"trial", "expired"}
     return OpenAIResponsesClient(user_id=user_id) if is_free else AnthropicMessagesClient(user_id=user_id)

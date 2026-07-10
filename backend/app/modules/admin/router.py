@@ -828,3 +828,54 @@ async def renew_user_trial(user_id: str, user=Depends(require_admin)) -> dict:
         on_conflict="user_id",
     )
     return {"renewed": True, "trial_end": trial_end.isoformat()}
+
+
+VALID_PLAN_KEYS = {"explorer", "starter_insight", "decision_engine", "growth_navigator", "strategic_business_os"}
+VALID_STATUSES = {"active", "trial", "expired", "grandfathered"}
+VALID_BILLING_PERIODS = {"monthly", "annual"}
+
+
+@router.patch("/users/{user_id}/plan")
+async def set_user_plan(user_id: str, payload: dict, user=Depends(require_admin)) -> dict:
+    plan_key = (payload.get("plan_key") or "").strip()
+    billing_period = (payload.get("billing_period") or "monthly").strip()
+    new_status = (payload.get("status") or "active").strip()
+
+    if plan_key not in VALID_PLAN_KEYS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan_key. Must be one of: {', '.join(sorted(VALID_PLAN_KEYS))}")
+    if billing_period not in VALID_BILLING_PERIODS:
+        raise HTTPException(status_code=400, detail="billing_period must be 'monthly' or 'annual'.")
+    if new_status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
+
+    user_row = await sb_select("users", filters=[("id", "eq", user_id)], single=True)
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    now = datetime.now(timezone.utc)
+    if new_status == "trial":
+        period_end = now + timedelta(days=TRIAL_DAYS)
+    elif new_status == "active":
+        months = 12 if billing_period == "annual" else 1
+        period_end = now + timedelta(days=365 if billing_period == "annual" else 31)
+    else:
+        period_end = now
+
+    await sb_upsert(
+        "user_subscriptions",
+        payload={
+            "user_id": user_id,
+            "plan_key": plan_key,
+            "billing_period": billing_period,
+            "status": new_status,
+            "stripe_subscription_id": None,
+            "stripe_customer_id": None,
+            "current_period_start": now.isoformat(),
+            "current_period_end": period_end.isoformat(),
+            "cancelled_at": None,
+            "updated_at": now.isoformat(),
+        },
+        on_conflict="user_id",
+    )
+    updated = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
+    return updated or {"user_id": user_id, "plan_key": plan_key, "billing_period": billing_period, "status": new_status}

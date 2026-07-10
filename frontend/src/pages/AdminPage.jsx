@@ -468,6 +468,11 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
   const [subscription, setSubscription] = useState(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
   const [trialLoading, setTrialLoading] = useState(false);
+  const [showPlanOverride, setShowPlanOverride] = useState(false);
+  const [planOverrideKey, setPlanOverrideKey] = useState("starter_insight");
+  const [planOverridePeriod, setPlanOverridePeriod] = useState("monthly");
+  const [planOverrideStatus, setPlanOverrideStatus] = useState("active");
+  const [planOverrideLoading, setPlanOverrideLoading] = useState(false);
 
   // Activity tab state
   const [fullData, setFullData] = useState(null);
@@ -489,6 +494,7 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
     setGrants([]);
     setShowBlockForm(false);
     setBlockReasonInput("");
+    setShowPlanOverride(false);
     loadRestrictions(user.id);
     loadSubscription(user.id);
     loadGrants(user.id);
@@ -575,6 +581,25 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
       showToast("error", e.message || "Failed to renew trial.");
     } finally {
       setTrialLoading(false);
+    }
+  }
+
+  async function handleSetPlan() {
+    if (!user || planOverrideLoading) return;
+    setPlanOverrideLoading(true);
+    try {
+      const updated = await apiRequest(`/admin/users/${user.id}/plan`, "PATCH", {
+        plan_key: planOverrideKey,
+        billing_period: planOverridePeriod,
+        status: planOverrideStatus,
+      });
+      setSubscription(updated);
+      setShowPlanOverride(false);
+      showToast("success", `Plan updated to ${planOverrideKey} (${planOverrideStatus}).`);
+    } catch (e) {
+      showToast("error", e.message || "Failed to update plan.");
+    } finally {
+      setPlanOverrideLoading(false);
     }
   }
 
@@ -958,6 +983,90 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
                   </div>
                 );
               })() : null}
+
+              {/* Plan override */}
+              <div className="mt-3">
+                {!showPlanOverride ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlanOverrideKey(subscription?.plan_key ?? "starter_insight");
+                      setPlanOverridePeriod(subscription?.billing_period ?? "monthly");
+                      setPlanOverrideStatus(subscription?.status === "active" ? "active" : "active");
+                      setShowPlanOverride(true);
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </svg>
+                    Change plan
+                  </button>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="mb-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Override plan</p>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-[11px] text-slate-500">Plan</label>
+                          <select
+                            value={planOverrideKey}
+                            onChange={(e) => setPlanOverrideKey(e.target.value)}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                          >
+                            <option value="explorer">Explorer (Free)</option>
+                            <option value="starter_insight">Starter Insight</option>
+                            <option value="decision_engine">Decision Engine</option>
+                            <option value="growth_navigator">Growth Navigator</option>
+                            <option value="strategic_business_os">Strategic Business OS</option>
+                          </select>
+                        </div>
+                        <div className="w-28">
+                          <label className="mb-1 block text-[11px] text-slate-500">Billing</label>
+                          <select
+                            value={planOverridePeriod}
+                            onChange={(e) => setPlanOverridePeriod(e.target.value)}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                          >
+                            <option value="monthly">Monthly</option>
+                            <option value="annual">Annual</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[11px] text-slate-500">Status</label>
+                        <select
+                          value={planOverrideStatus}
+                          onChange={(e) => setPlanOverrideStatus(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                        >
+                          <option value="active">Active</option>
+                          <option value="trial">Trial</option>
+                          <option value="grandfathered">Grandfathered</option>
+                          <option value="expired">Expired</option>
+                        </select>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowPlanOverride(false)}
+                          className="flex-1 rounded-xl border border-slate-200 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={planOverrideLoading}
+                          onClick={handleSetPlan}
+                          className="flex-1 rounded-xl bg-brand-600 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-40"
+                        >
+                          {planOverrideLoading ? "Saving…" : "Set plan"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Platform restrictions */}
@@ -1351,6 +1460,7 @@ const TABS = [
   { key: "module-interest", label: "Module Interest" },
   { key: "mailing-list", label: "Mailing List" },
   { key: "support", label: "Support Messages" },
+  { key: "referrals", label: "Referrals" },
 ];
 
 const INV_FILTERS = ["all", "pending", "accepted", "revoked"];
@@ -1449,6 +1559,46 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab === "support") loadSupportMessages();
   }, [tab, loadSupportMessages]);
+
+  const [referralStats, setReferralStats] = useState(null);
+  const [referralParticipants, setReferralParticipants] = useState(null);
+  const [referralPayouts, setReferralPayouts] = useState(null);
+  const [referralLoaded, setReferralLoaded] = useState(false);
+  const [referralPayoutAction, setReferralPayoutAction] = useState({}); // {[id]: loading}
+  const [referralPayoutReason, setReferralPayoutReason] = useState({}); // {[id]: string}
+
+  const loadReferrals = useCallback(() => {
+    if (referralLoaded) return;
+    Promise.all([
+      apiRequest("/referrals/admin/stats", "GET").catch(() => null),
+      apiRequest("/referrals/admin/participants", "GET").catch(() => ({ items: [] })),
+      apiRequest("/referrals/admin/payouts", "GET").catch(() => ({ items: [] })),
+    ]).then(([stats, parts, payouts]) => {
+      setReferralStats(stats);
+      setReferralParticipants(parts?.items || []);
+      setReferralPayouts(payouts?.items || []);
+      setReferralLoaded(true);
+    });
+  }, [referralLoaded]);
+
+  useEffect(() => {
+    if (tab === "referrals") loadReferrals();
+  }, [tab, loadReferrals]);
+
+  async function handlePayoutDecision(payoutId, action) {
+    const reason = referralPayoutReason[payoutId] || "";
+    if (!reason.trim()) { alert("Please enter a reason before deciding."); return; }
+    setReferralPayoutAction((p) => ({ ...p, [payoutId]: true }));
+    try {
+      await apiRequest(`/referrals/admin/payouts/${payoutId}`, "PATCH", { action, reason });
+      const updated = await apiRequest("/referrals/admin/payouts", "GET");
+      setReferralPayouts(updated?.items || []);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReferralPayoutAction((p) => ({ ...p, [payoutId]: false }));
+    }
+  }
 
   const [mailingList, setMailingList] = useState(null);
   const [mailingListLoaded, setMailingListLoaded] = useState(false);
@@ -2801,6 +2951,147 @@ export default function AdminPage() {
                 rows={filteredSupport}
                 emptyText="No support or feedback messages yet"
               />
+            )}
+          </div>
+        )}
+
+        {/* ── Referrals ── */}
+        {tab === "referrals" && (
+          <div className="space-y-5">
+            {!referralLoaded ? (
+              <div className="flex items-center justify-center py-16">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand-200 border-t-brand-600" />
+              </div>
+            ) : (
+              <>
+                {/* KPIs */}
+                {referralStats && (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    {[
+                      { label: "Participants", value: referralStats.participants?.total ?? 0 },
+                      { label: "Active", value: referralStats.participants?.active ?? 0 },
+                      { label: "Pending rewards", value: `£${((referralStats.rewards?.pending_minor || 0) / 100).toFixed(2)}` },
+                      { label: "Approved liability", value: `£${((referralStats.rewards?.outstanding_liability_minor || 0) / 100).toFixed(2)}` },
+                      { label: "Total paid out", value: `£${((referralStats.payouts?.paid_minor || 0) / 100).toFixed(2)}` },
+                      { label: "Payout requests", value: referralStats.payouts?.requested ?? 0 },
+                      { label: "Reward entries", value: referralStats.rewards?.total_entries ?? 0 },
+                      { label: "Paid payouts", value: referralStats.payouts?.paid ?? 0 },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                        <p className="text-xs text-slate-500">{label}</p>
+                        <p className="mt-1 text-xl font-bold text-slate-900 dark:text-slate-100">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Payout queue */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+                  <h2 className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">Payout queue</h2>
+                  {!referralPayouts?.length ? (
+                    <p className="text-xs text-slate-400">No payout requests yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {referralPayouts.map((p) => (
+                        <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">{p.participant_user_id}</p>
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                £{((p.amount_minor || 0) / 100).toFixed(2)} · {p.status} · {p.requested_at ? new Date(p.requested_at).toLocaleDateString("en-GB") : ""}
+                              </p>
+                              {p.payout_profile_snapshot && (() => {
+                                try {
+                                  const snap = typeof p.payout_profile_snapshot === "string" ? JSON.parse(p.payout_profile_snapshot) : p.payout_profile_snapshot;
+                                  return <p className="mt-0.5 text-[11px] text-slate-400">{snap.method === "paypal" ? `PayPal: ${snap.paypal_email_masked}` : `Bank: ${snap.account_name} ${snap.sort_code_masked} ${snap.account_number_masked}`}</p>;
+                                } catch { return null; }
+                              })()}
+                            </div>
+                            {["requested", "under_review", "action_required", "approved"].includes(p.status) && (
+                              <div className="flex flex-col gap-2 min-w-[200px]">
+                                <input
+                                  type="text"
+                                  placeholder="Reason (required)"
+                                  value={referralPayoutReason[p.id] || ""}
+                                  onChange={(e) => setReferralPayoutReason((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-700 dark:text-slate-100"
+                                />
+                                <div className="flex gap-2">
+                                  {p.status !== "approved" && (
+                                    <button
+                                      disabled={referralPayoutAction[p.id]}
+                                      onClick={() => handlePayoutDecision(p.id, "approve")}
+                                      className="flex-1 rounded-lg bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                                    >Approve</button>
+                                  )}
+                                  {p.status === "approved" && (
+                                    <button
+                                      disabled={referralPayoutAction[p.id]}
+                                      onClick={() => handlePayoutDecision(p.id, "mark_paid")}
+                                      className="flex-1 rounded-lg bg-brand-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                                    >Mark Paid</button>
+                                  )}
+                                  <button
+                                    disabled={referralPayoutAction[p.id]}
+                                    onClick={() => handlePayoutDecision(p.id, "reject")}
+                                    className="flex-1 rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                  >Reject</button>
+                                </div>
+                              </div>
+                            )}
+                            {["paid", "rejected", "failed", "cancelled"].includes(p.status) && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                p.status === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                              }`}>{p.status}</span>
+                            )}
+                          </div>
+                          {p.review_reason && (
+                            <p className="mt-2 text-[11px] text-slate-400">Reason: {p.review_reason}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Participants table */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+                  <h2 className="mb-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    Participants <span className="font-normal text-slate-400">({referralParticipants?.length || 0})</span>
+                  </h2>
+                  {!referralParticipants?.length ? (
+                    <p className="text-xs text-slate-400">No participants yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-100 dark:border-slate-800">
+                            {["User", "Code", "Status", "Joined"].map((h) => (
+                              <th key={h} className="pb-2 pr-4 font-semibold text-slate-500">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {referralParticipants.map((p) => (
+                            <tr key={p.id} className="border-b border-slate-50 dark:border-slate-800/50">
+                              <td className="py-2 pr-4 text-slate-700 dark:text-slate-300">{p.user_id}</td>
+                              <td className="py-2 pr-4 font-mono text-slate-600 dark:text-slate-400">{p.referral_code}</td>
+                              <td className="py-2 pr-4">
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  p.status === "active" ? "bg-emerald-100 text-emerald-700" :
+                                  p.status === "suspended" ? "bg-rose-100 text-rose-700" :
+                                  "bg-slate-100 text-slate-600"
+                                }`}>{p.status}</span>
+                              </td>
+                              <td className="py-2 text-slate-400">{p.joined_at ? new Date(p.joined_at).toLocaleDateString("en-GB") : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         )}
