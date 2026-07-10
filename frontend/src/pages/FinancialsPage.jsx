@@ -2007,6 +2007,14 @@ th{text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:#64748b;}
             )}
           </SectionCard>
         </div>
+
+
+        <SectionCard
+          title="Integrations"
+          subtitle="Connect QuickBooks or Xero to sync invoices, expenses and contacts."
+        >
+          <IntegrationPanel providers={["quickbooks", "xero"]} />
+        </SectionCard>
       </div>
       ) : null}
 
