@@ -41,20 +41,32 @@ async def get_wallet(user_id: str) -> dict | None:
 
 
 async def ensure_wallet(user_id: str) -> dict:
-    """Return existing wallet or create a new empty one."""
+    """Return existing wallet, or create one with the correct plan allocation."""
     wallet = await get_wallet(user_id)
     if wallet:
         return wallet
 
-    result = await _rpc("grant_credits", {
+    # Look up plan so the first wallet gets the right credit amount
+    initial_credits, plan_code = await _initial_credits_for_user(user_id)
+
+    await _rpc("grant_credits", {
         "p_user_id": user_id,
-        "p_amount": 0,
+        "p_amount": initial_credits,
         "p_type": "allocation",
-        "p_reason": "Wallet initialised",
+        "p_reason": f"{plan_code} initial credit allocation",
         "p_next_reset_at": None,
     })
     wallet = await get_wallet(user_id)
     return wallet  # type: ignore[return-value]
+
+
+async def _initial_credits_for_user(user_id: str) -> tuple[int, str]:
+    """Return (credits, plan_code) for a brand-new wallet based on the user's current plan."""
+    sub = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
+    plan_code = (sub or {}).get("plan_key") or "explorer"
+    plan_cfg = await sb_select("plan_credit_config", filters=[("plan_code", "eq", plan_code)], single=True)
+    credits = int((plan_cfg or {}).get("credits_per_period") or 50)
+    return credits, plan_code
 
 
 async def get_balance(user_id: str) -> int:
@@ -138,6 +150,27 @@ async def release_credits(generation_id: str, user_id: str, feature_code: str) -
         "p_generation_id": generation_id,
         "p_idempotency_key": idempotency_key,
     })
+
+
+# ---------------------------------------------------------------------------
+# Plan provisioning (called on checkout completion / plan change)
+# ---------------------------------------------------------------------------
+
+async def provision_plan_credits(user_id: str, plan_code: str, reason: str = "") -> dict:
+    """
+    Grant the correct credits for plan_code to user_id.
+    Safe to call on plan change — always grants the full allocation.
+    """
+    plan_cfg = await sb_select("plan_credit_config", filters=[("plan_code", "eq", plan_code)], single=True)
+    credits = int((plan_cfg or {}).get("credits_per_period") or 0)
+    if credits <= 0:
+        return {"ok": True, "granted": 0}
+    return await grant_credits(
+        user_id,
+        credits,
+        grant_type="allocation",
+        reason=reason or f"{plan_code} plan credit allocation",
+    )
 
 
 # ---------------------------------------------------------------------------

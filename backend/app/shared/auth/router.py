@@ -22,6 +22,11 @@ async def register(payload: RegisterRequest) -> UserPublic:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     user_doc = {"id": payload.email.lower(), "email": payload.email.lower(), "password_hash": hash_password(payload.password)}
     await sb_insert("users", user_doc)
+    try:
+        from app.modules.credits.service import grant_credits
+        await grant_credits(user_doc["id"], 50, "allocation", "Explorer initial credit allocation")
+    except Exception:
+        pass
     return UserPublic(id=user_doc["id"], email=user_doc["email"])
 
 
@@ -66,6 +71,12 @@ async def google_auth(payload: GoogleAuthRequest) -> TokenResponse:
         )
 
     token = create_access_token(subject=identity.email)
+    if not existing:
+        try:
+            from app.modules.credits.service import grant_credits
+            await grant_credits(identity.email, 50, "allocation", "Explorer initial credit allocation")
+        except Exception:
+            pass
     return TokenResponse(access_token=token)
 
 

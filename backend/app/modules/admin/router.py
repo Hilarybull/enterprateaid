@@ -945,4 +945,12 @@ async def set_user_plan(user_id: str, payload: dict, user=Depends(require_admin)
         on_conflict="user_id",
     )
     updated = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
+
+    # Grant plan credits for the new plan
+    try:
+        from app.modules.credits.service import provision_plan_credits
+        await provision_plan_credits(user_id, plan_key, f"Admin plan override → {plan_key}")
+    except Exception as exc:
+        logger.warning("Credit provisioning failed for %s plan %s: %s", user_id, plan_key, exc)
+
     return updated or {"user_id": user_id, "plan_key": plan_key, "billing_period": billing_period, "status": new_status}

@@ -411,6 +411,12 @@ async def stripe_webhook(request: Request):
                 },
                 on_conflict="user_id",
             )
+            # Grant plan credits for the new subscription
+            try:
+                from app.modules.credits.service import provision_plan_credits
+                await provision_plan_credits(user_id, plan_key, f"Stripe checkout — {plan_key} plan")
+            except Exception as exc:
+                logger.warning("Credit provisioning failed for %s plan %s: %s", user_id, plan_key, exc)
 
     elif etype in ("customer.subscription.deleted", "customer.subscription.updated"):
         sub_obj = event["data"]["object"] if isinstance(event, dict) else event.data.object
