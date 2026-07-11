@@ -132,6 +132,71 @@ def _rollup_ai_usage(rows: list, user_email_map: dict[str, str]) -> dict:
     }
 
 
+async def _select_credit_stats(user_email_map: dict[str, str]) -> dict:
+    try:
+        wallets = await sb_select(
+            "credit_wallets",
+            columns="user_id,available_credits,held_credits,lifetime_credits_issued,lifetime_credits_used",
+        )
+    except Exception:
+        wallets = []
+
+    try:
+        txns = await sb_select(
+            "credit_transactions",
+            filters=[("transaction_type", "eq", "deduction")],
+            columns="user_id,feature_code,credits,created_at",
+            order="created_at",
+            desc=True,
+            limit=5000,
+        )
+    except Exception:
+        txns = []
+
+    total_issued = sum(int(w.get("lifetime_credits_issued") or 0) for w in wallets)
+    total_consumed = sum(int(w.get("lifetime_credits_used") or 0) for w in wallets)
+    total_available = sum(int(w.get("available_credits") or 0) for w in wallets)
+    total_held = sum(int(w.get("held_credits") or 0) for w in wallets)
+
+    by_feature: dict[str, dict] = {}
+    by_user: dict[str, dict] = {}
+    for t in txns:
+        fc = t.get("feature_code") or "unknown"
+        cost = abs(int(t.get("credits") or 0))
+        by_feature.setdefault(fc, {"feature_code": fc, "uses": 0, "credits": 0})
+        by_feature[fc]["uses"] += 1
+        by_feature[fc]["credits"] += cost
+
+        uid = t.get("user_id") or "unknown"
+        email = user_email_map.get(uid, uid)
+        by_user.setdefault(uid, {"user_id": uid, "email": email, "credits": 0, "uses": 0})
+        by_user[uid]["credits"] += cost
+        by_user[uid]["uses"] += 1
+
+    wallet_rows = []
+    for w in sorted(wallets, key=lambda x: int(x.get("lifetime_credits_used") or 0), reverse=True):
+        uid = w.get("user_id") or ""
+        wallet_rows.append({
+            "user_id": uid,
+            "email": user_email_map.get(uid, uid),
+            "available": int(w.get("available_credits") or 0),
+            "held": int(w.get("held_credits") or 0),
+            "lifetime_issued": int(w.get("lifetime_credits_issued") or 0),
+            "lifetime_used": int(w.get("lifetime_credits_used") or 0),
+        })
+
+    return {
+        "total_issued": total_issued,
+        "total_consumed": total_consumed,
+        "total_available": total_available,
+        "total_held": total_held,
+        "wallet_count": len(wallets),
+        "by_feature": sorted(by_feature.values(), key=lambda x: x["credits"], reverse=True),
+        "top_users": sorted(by_user.values(), key=lambda x: x["credits"], reverse=True)[:10],
+        "wallets": wallet_rows[:50],
+    }
+
+
 @router.get("/stats")
 async def get_system_stats(user=Depends(require_admin)) -> dict:
     workspaces = await sb_select("workspaces", columns="id,name,user_id,created_at")
@@ -144,6 +209,7 @@ async def get_system_stats(user=Depends(require_admin)) -> dict:
     workspace_name_map = {ws["id"]: (ws.get("name") or "Unnamed") for ws in workspaces}
     ai_usage_events = await _select_ai_usage_events()
     ai_usage = _rollup_ai_usage(ai_usage_events, user_email_map)
+    credit_stats = await _select_credit_stats(user_email_map)
 
     sim_count = 0
     blueprint_count = 0
@@ -174,6 +240,7 @@ async def get_system_stats(user=Depends(require_admin)) -> dict:
         "total_ai_tokens": ai_usage["total_tokens"],
         "total_ai_cost_usd": ai_usage["estimated_cost_usd"],
         "ai_usage": ai_usage,
+        "credit_stats": credit_stats,
         "workspaces": [
             {
                 "id": ws["id"],

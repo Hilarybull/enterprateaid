@@ -542,6 +542,13 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
   const [planOverrideStatus, setPlanOverrideStatus] = useState("active");
   const [planOverrideLoading, setPlanOverrideLoading] = useState(false);
 
+  // Credits state
+  const [creditWallet, setCreditWallet] = useState(null);
+  const [creditWalletLoading, setCreditWalletLoading] = useState(false);
+  const [grantAmount, setGrantAmount] = useState("50");
+  const [grantReason, setGrantReason] = useState("");
+  const [grantLoading, setGrantLoading] = useState(false);
+
   // Activity tab state
   const [fullData, setFullData] = useState(null);
   const [fullDataLoading, setFullDataLoading] = useState(false);
@@ -566,6 +573,7 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
     loadRestrictions(user.id);
     loadSubscription(user.id);
     loadGrants(user.id);
+    loadCreditWallet(user.id);
   }, [user?.id]);
 
   useEffect(() => {
@@ -680,6 +688,40 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
       showToast("error", e.message || "Failed to load user data.");
     } finally {
       setFullDataLoading(false);
+    }
+  }
+
+  async function loadCreditWallet(userId) {
+    setCreditWalletLoading(true);
+    try {
+      const data = await apiRequest(`/credits/admin/wallet/${userId}`, "GET");
+      setCreditWallet(data);
+    } catch {
+      setCreditWallet(null);
+    } finally {
+      setCreditWalletLoading(false);
+    }
+  }
+
+  async function handleGrantCredits() {
+    const amount = parseInt(grantAmount, 10);
+    if (!amount || amount <= 0 || grantLoading) return;
+    setGrantLoading(true);
+    try {
+      await apiRequest("/credits/admin/grant", "POST", {
+        user_id: user.id,
+        amount,
+        reason: grantReason.trim() || "Admin grant",
+        grant_type: "admin_adjustment",
+      });
+      showToast("success", `${amount} credits granted to ${user.email}.`);
+      setGrantAmount("50");
+      setGrantReason("");
+      loadCreditWallet(user.id);
+    } catch (e) {
+      showToast("error", e.message || "Failed to grant credits.");
+    } finally {
+      setGrantLoading(false);
     }
   }
 
@@ -1284,6 +1326,65 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
                 </button>
               </div>
             </div>
+
+            {/* ── Credit wallet ── */}
+            <div>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">AI Credits</h3>
+              {creditWalletLoading ? (
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <div className="h-3 w-3 animate-spin rounded-full border border-slate-300 border-t-slate-600" />
+                  Loading wallet…
+                </div>
+              ) : creditWallet ? (
+                <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    { label: "Available", value: creditWallet.available_credits ?? 0, color: "text-emerald-600" },
+                    { label: "Held", value: creditWallet.held_credits ?? 0, color: "text-amber-600" },
+                    { label: "Lifetime issued", value: creditWallet.lifetime_credits_issued ?? 0, color: "text-slate-700" },
+                    { label: "Lifetime used", value: creditWallet.lifetime_credits_used ?? 0, color: "text-violet-700" },
+                  ].map((m) => (
+                    <div key={m.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                      <div className={`text-lg font-bold tabular-nums ${m.color}`}>{m.value.toLocaleString()}</div>
+                      <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mb-3 text-xs text-slate-400">No wallet provisioned yet for this user.</p>
+              )}
+              <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+                <p className="mb-3 text-[12px] font-semibold text-violet-800">Grant credits</p>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      max="10000"
+                      value={grantAmount}
+                      onChange={(e) => setGrantAmount(e.target.value)}
+                      placeholder="Amount"
+                      className="w-24 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 focus:ring-violet-400"
+                    />
+                    <input
+                      type="text"
+                      value={grantReason}
+                      onChange={(e) => setGrantReason(e.target.value)}
+                      placeholder="Reason (optional)"
+                      className="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 focus:ring-violet-400"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!grantAmount || parseInt(grantAmount) <= 0 || grantLoading}
+                    onClick={handleGrantCredits}
+                    className="rounded-xl bg-violet-600 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-40"
+                  >
+                    {grantLoading ? "Granting…" : `Grant ⚡ ${grantAmount || 0} credits`}
+                  </button>
+                </div>
+              </div>
+            </div>
+
           </div>
         )}
 
@@ -1520,6 +1621,7 @@ function StatTile({ config, value, onClick }) {
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "ai-usage", label: "AI Usage" },
+  { key: "credits", label: "Credits" },
   { key: "workspaces", label: "Workspaces" },
   { key: "users", label: "Users" },
   { key: "members", label: "Members" },
@@ -2145,7 +2247,53 @@ export default function AdminPage() {
               </section>
             )}
 
-            {/* 4 — Recent workspaces + users (compact reference) */}
+            {/* 4 — Credits snapshot */}
+            {stats?.credit_stats && (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-800">Credits snapshot</h2>
+                  <button type="button" onClick={() => goToTab("credits")} className="text-xs font-medium text-brand-600 hover:text-brand-700">Full report →</button>
+                </div>
+                <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[
+                    { label: "Total issued", value: (stats.credit_stats.total_issued ?? 0).toLocaleString() },
+                    { label: "Total consumed", value: (stats.credit_stats.total_consumed ?? 0).toLocaleString() },
+                    { label: "Total available", value: (stats.credit_stats.total_available ?? 0).toLocaleString() },
+                    { label: "Active wallets", value: (stats.credit_stats.wallet_count ?? 0).toLocaleString() },
+                  ].map((m) => (
+                    <div key={m.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                      <div className="text-xl font-bold tabular-nums text-slate-900">{m.value}</div>
+                      <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {(stats.credit_stats.by_feature || []).length > 0 && (
+                  <div className="divide-y divide-slate-50">
+                    <div className="flex items-center justify-between pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      <span>Feature</span>
+                      <span className="flex gap-8">
+                        <span>Uses</span>
+                        <span>Credits</span>
+                      </span>
+                    </div>
+                    {(stats.credit_stats.by_feature || []).slice(0, 6).map((row) => (
+                      <div key={row.feature_code} className="flex items-center justify-between gap-3 py-1.5 text-[12px]">
+                        <span className="truncate font-mono text-slate-700">{row.feature_code}</span>
+                        <span className="flex shrink-0 gap-8 tabular-nums text-slate-500">
+                          <span className="w-10 text-right">{row.uses}</span>
+                          <span className="w-14 text-right font-semibold text-violet-700">⚡{row.credits}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!(stats.credit_stats.by_feature || []).length && (
+                  <p className="text-xs text-slate-400">No credit transactions recorded yet.</p>
+                )}
+              </section>
+            )}
+
+            {/* 6 — Recent workspaces + users (compact reference) */}
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <section className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -2577,6 +2725,122 @@ export default function AdminPage() {
                         {allEvents.length ? "No calls match the current filters." : "No AI calls recorded yet. Run any AI feature to see events here."}
                       </p>
                     )}
+            </section>
+
+          </div>
+          );
+        })()}
+
+        {/* ── Credits ── */}
+        {tab === "credits" && (() => {
+          const cs = stats?.credit_stats;
+          return (
+          <div className="space-y-5">
+
+            {/* Summary metrics */}
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              {[
+                { label: "Credits issued", value: (cs?.total_issued ?? 0).toLocaleString(), color: "text-violet-700" },
+                { label: "Credits consumed", value: (cs?.total_consumed ?? 0).toLocaleString(), color: "text-rose-600" },
+                { label: "Credits available", value: (cs?.total_available ?? 0).toLocaleString(), color: "text-emerald-600" },
+                { label: "Credits held", value: (cs?.total_held ?? 0).toLocaleString(), color: "text-amber-600" },
+              ].map((m) => (
+                <div key={m.label} className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className={`text-2xl font-bold tabular-nums ${m.color}`}>{m.value}</div>
+                  <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{m.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              {/* By feature */}
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h2 className="mb-4 text-sm font-semibold text-slate-800">Credits consumed by feature</h2>
+                {(cs?.by_feature || []).length > 0 ? (
+                  <div className="divide-y divide-slate-50">
+                    <div className="flex items-center justify-between pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      <span>Feature</span>
+                      <span className="flex gap-8">
+                        <span>Uses</span>
+                        <span>Credits</span>
+                      </span>
+                    </div>
+                    {(cs.by_feature || []).map((row) => (
+                      <div key={row.feature_code} className="flex items-center justify-between gap-3 py-2 text-[13px]">
+                        <span className="truncate font-mono text-slate-700">{row.feature_code}</span>
+                        <span className="flex shrink-0 gap-8 tabular-nums">
+                          <span className="w-10 text-right text-slate-500">{row.uses}</span>
+                          <span className="w-16 text-right font-semibold text-violet-700">⚡ {row.credits}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">No deductions recorded yet.</p>
+                )}
+              </section>
+
+              {/* Top users */}
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h2 className="mb-4 text-sm font-semibold text-slate-800">Top users by credits spent</h2>
+                {(cs?.top_users || []).length > 0 ? (
+                  <div className="divide-y divide-slate-50">
+                    <div className="flex items-center justify-between pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      <span>User</span>
+                      <span className="flex gap-8">
+                        <span>Uses</span>
+                        <span>Credits</span>
+                      </span>
+                    </div>
+                    {(cs.top_users || []).map((row) => (
+                      <div key={row.user_id} className="flex items-center justify-between gap-3 py-2 text-[13px]">
+                        <span className="min-w-0 truncate text-slate-700">{row.email}</span>
+                        <span className="flex shrink-0 gap-8 tabular-nums">
+                          <span className="w-10 text-right text-slate-500">{row.uses}</span>
+                          <span className="w-16 text-right font-semibold text-violet-700">⚡ {row.credits}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">No credit usage recorded yet.</p>
+                )}
+              </section>
+            </div>
+
+            {/* All wallets */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h2 className="mb-4 text-sm font-semibold text-slate-800">
+                User wallets <span className="ml-1 font-normal text-slate-400">({cs?.wallet_count ?? 0})</span>
+              </h2>
+              {(cs?.wallets || []).length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        <th className="pb-2 pr-4">User</th>
+                        <th className="pb-2 pr-4 text-right">Available</th>
+                        <th className="pb-2 pr-4 text-right">Held</th>
+                        <th className="pb-2 pr-4 text-right">Lifetime Issued</th>
+                        <th className="pb-2 text-right">Lifetime Used</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {(cs.wallets || []).map((w) => (
+                        <tr key={w.user_id}>
+                          <td className="py-2 pr-4 max-w-[200px] truncate text-slate-700">{w.email}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums font-semibold text-emerald-600">{w.available}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-amber-600">{w.held}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-slate-500">{w.lifetime_issued}</td>
+                          <td className="py-2 text-right tabular-nums font-semibold text-violet-700">{w.lifetime_used}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">No wallets provisioned yet.</p>
+              )}
             </section>
 
           </div>
