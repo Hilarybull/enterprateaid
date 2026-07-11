@@ -545,6 +545,7 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
   // Credits state
   const [creditWallet, setCreditWallet] = useState(null);
   const [creditWalletLoading, setCreditWalletLoading] = useState(false);
+  const [creditAction, setCreditAction] = useState("grant");
   const [grantAmount, setGrantAmount] = useState("50");
   const [grantReason, setGrantReason] = useState("");
   const [grantLoading, setGrantLoading] = useState(false);
@@ -703,23 +704,32 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
     }
   }
 
-  async function handleGrantCredits() {
+  async function handleCreditAction() {
     const amount = parseInt(grantAmount, 10);
     if (!amount || amount <= 0 || grantLoading) return;
     setGrantLoading(true);
     try {
-      await apiRequest("/credits/admin/grant", "POST", {
-        user_id: user.id,
-        amount,
-        reason: grantReason.trim() || "Admin grant",
-        grant_type: "admin_adjustment",
-      });
-      showToast("success", `${amount} credits granted to ${user.email}.`);
+      if (creditAction === "grant") {
+        await apiRequest("/credits/admin/grant", "POST", {
+          user_id: user.id,
+          amount,
+          reason: grantReason.trim() || "Admin grant",
+          grant_type: "admin_adjustment",
+        });
+        showToast("success", `⚡ ${amount} credits granted to ${user.email}.`);
+      } else {
+        const res = await apiRequest("/credits/admin/deduct", "POST", {
+          user_id: user.id,
+          amount,
+          reason: grantReason.trim() || "Admin deduction",
+        });
+        showToast("success", `⚡ ${res.deducted ?? amount} credits deducted from ${user.email}.`);
+      }
       setGrantAmount("50");
       setGrantReason("");
       loadCreditWallet(user.id);
     } catch (e) {
-      showToast("error", e.message || "Failed to grant credits.");
+      showToast("error", e.message || "Failed to adjust credits.");
     } finally {
       setGrantLoading(false);
     }
@@ -1352,8 +1362,24 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
               ) : (
                 <p className="mb-3 text-xs text-slate-400">No wallet provisioned yet for this user.</p>
               )}
-              <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
-                <p className="mb-3 text-[12px] font-semibold text-violet-800">Grant credits</p>
+              <div className={`rounded-xl border p-4 ${creditAction === "grant" ? "border-violet-100 bg-violet-50" : "border-rose-100 bg-rose-50"}`}>
+                {/* Toggle */}
+                <div className="mb-3 flex items-center gap-1 rounded-lg bg-white/60 p-1 w-fit border border-slate-200">
+                  {[{ k: "grant", label: "Grant" }, { k: "deduct", label: "Deduct" }].map(({ k, label }) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setCreditAction(k)}
+                      className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                        creditAction === k
+                          ? k === "grant" ? "bg-violet-600 text-white" : "bg-rose-600 text-white"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
                     <input
@@ -1363,23 +1389,27 @@ function UserDetailPanel({ user, stats, upgrades, onClose, onDeleteUser, onDelet
                       value={grantAmount}
                       onChange={(e) => setGrantAmount(e.target.value)}
                       placeholder="Amount"
-                      className="w-24 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 focus:ring-violet-400"
+                      className={`w-24 rounded-lg border bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 ${creditAction === "grant" ? "border-violet-200 focus:ring-violet-400" : "border-rose-200 focus:ring-rose-400"}`}
                     />
                     <input
                       type="text"
                       value={grantReason}
                       onChange={(e) => setGrantReason(e.target.value)}
                       placeholder="Reason (optional)"
-                      className="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 focus:ring-violet-400"
+                      className={`flex-1 rounded-lg border bg-white px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:ring-1 ${creditAction === "grant" ? "border-violet-200 focus:ring-violet-400" : "border-rose-200 focus:ring-rose-400"}`}
                     />
                   </div>
                   <button
                     type="button"
                     disabled={!grantAmount || parseInt(grantAmount) <= 0 || grantLoading}
-                    onClick={handleGrantCredits}
-                    className="rounded-xl bg-violet-600 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-40"
+                    onClick={handleCreditAction}
+                    className={`rounded-xl py-2 text-xs font-semibold text-white transition disabled:opacity-40 ${creditAction === "grant" ? "bg-violet-600 hover:bg-violet-700" : "bg-rose-600 hover:bg-rose-700"}`}
                   >
-                    {grantLoading ? "Granting…" : `Grant ⚡ ${grantAmount || 0} credits`}
+                    {grantLoading
+                      ? (creditAction === "grant" ? "Granting…" : "Deducting…")
+                      : creditAction === "grant"
+                        ? `Grant ⚡ ${grantAmount || 0} credits`
+                        : `Deduct ⚡ ${grantAmount || 0} credits`}
                   </button>
                 </div>
               </div>

@@ -194,6 +194,19 @@ async def grant_credits(
 
 
 # ---------------------------------------------------------------------------
+# Admin deduction
+# ---------------------------------------------------------------------------
+
+async def deduct_credits_admin(user_id: str, amount: int, reason: str) -> dict:
+    """Admin-only: remove credits from a wallet without affecting lifetime_credits_issued."""
+    return await _rpc("admin_deduct_credits", {
+        "p_user_id": user_id,
+        "p_amount": abs(amount),
+        "p_reason": reason,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Transaction history
 # ---------------------------------------------------------------------------
 

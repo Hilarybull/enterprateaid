@@ -62,6 +62,19 @@ async def admin_grant_credits(body: dict, current_user: dict = Depends(get_curre
     return result
 
 
+@router.post("/admin/deduct")
+async def admin_deduct_credits(body: dict, current_user: dict = Depends(get_current_user)):
+    if current_user.get("email") != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    user_id = body.get("user_id")
+    amount = body.get("amount")
+    reason = body.get("reason", "Admin deduction")
+    if not user_id or amount is None:
+        raise HTTPException(status_code=400, detail="user_id and amount required")
+    result = await credit_svc.deduct_credits_admin(user_id, int(amount), reason)
+    return result
+
+
 @router.get("/admin/wallet/{user_id}")
 async def admin_get_wallet(user_id: str, current_user: dict = Depends(get_current_user)):
     if current_user.get("email") != ADMIN_EMAIL:
