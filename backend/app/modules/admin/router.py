@@ -103,7 +103,7 @@ def _rollup_ai_usage(rows: list, user_email_map: dict[str, str]) -> dict:
         item["estimated_cost_usd"] = round(item["estimated_cost_usd"], 6)
 
     recent = []
-    for row in rows[:25]:
+    for row in rows:
         user_id = str(row.get("user_id") or "")
         recent.append({
             "id": row.get("id"),
