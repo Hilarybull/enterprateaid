@@ -794,7 +794,7 @@ export default function LandingPage() {
           </div>
           <div className="mx-auto grid max-w-3xl gap-5 sm:grid-cols-2">
             {PLANS.map((plan) => (
-              <div key={plan.name} className={`relative overflow-hidden rounded-2xl border bg-white p-6 ${plan.highlight ? "border-brand-400 ring-2 ring-brand-200 shadow-xl shadow-brand-100" : "border-slate-200"}`}>
+              <div key={plan.name} className={`relative flex flex-col overflow-hidden rounded-2xl border bg-white p-6 ${plan.highlight ? "border-brand-400 ring-2 ring-brand-200 shadow-xl shadow-brand-100" : "border-slate-200"}`}>
                 {plan.badge && (
                   <div className="absolute right-5 top-5 rounded-full bg-brand-600 px-2.5 py-0.5 text-[11px] font-bold text-white">{plan.badge}</div>
                 )}
@@ -824,7 +824,7 @@ export default function LandingPage() {
                   <p className="text-xs text-slate-400">Billed monthly</p>
                 )}
                 {!plan.free && <p className="mt-2 text-xs text-slate-500">{plan.desc}</p>}
-                <ul className="mt-5 space-y-2.5">
+                <ul className="mt-5 grow space-y-2.5">
                   {plan.features.map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-slate-600">
                       <span className="mt-0.5 shrink-0 text-emerald-500">✓</span>
@@ -832,13 +832,15 @@ export default function LandingPage() {
                     </li>
                   ))}
                 </ul>
-                <button
-                  type="button"
-                  onClick={() => navigate("/login")}
-                  className={`mt-6 w-full rounded-xl px-4 py-3 text-sm font-semibold transition ${plan.highlight ? "bg-brand-600 text-white hover:bg-brand-700" : "border border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"}`}
-                >
-                  {plan.free ? "Start Free" : "Subscribe"}
-                </button>
+                <div className="mt-auto pt-6">
+                  <button
+                    type="button"
+                    onClick={() => navigate("/login")}
+                    className={`w-full rounded-xl px-4 py-3 text-sm font-semibold transition ${plan.highlight ? "bg-brand-600 text-white hover:bg-brand-700" : "border border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"}`}
+                  >
+                    {plan.free ? "Start Free" : "Subscribe"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
