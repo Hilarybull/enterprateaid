@@ -28,6 +28,7 @@ from app.modules.idea_validation.market_research_service import (
     _call_openai,
 )
 from app.shared.auth.deps import get_current_user
+from app.modules.credits.service import credit_guard
 
 router = APIRouter(prefix="/validation", tags=["idea_validation"])
 
@@ -208,15 +209,16 @@ async def suggest_field(
         sector_part=sector_part,
         country=payload.country or payload.location or "their market",
     )
-    try:
-        result = await _call_claude(prompt, user_id=user["id"], feature="validation.suggest_field")
-        suggestion = result.get("suggestion") or result.get("text") or ""
-    except Exception:
+    async with credit_guard(user["id"], "suggest_field"):
         try:
-            result = await _call_openai(prompt, user_id=user["id"], feature="validation.suggest_field")
+            result = await _call_claude(prompt, user_id=user["id"], feature="validation.suggest_field")
             suggestion = result.get("suggestion") or result.get("text") or ""
         except Exception:
-            suggestion = ""
+            try:
+                result = await _call_openai(prompt, user_id=user["id"], feature="validation.suggest_field")
+                suggestion = result.get("suggestion") or result.get("text") or ""
+            except Exception:
+                suggestion = ""
     return {"suggestion": suggestion.strip()}
 
 
@@ -234,4 +236,5 @@ async def market_research_endpoint(
         fields = flatten_fields_from_payload(iv)
     else:
         fields = {}
-    return await run_market_research(fields, user_id=user["id"])
+    async with credit_guard(user["id"], "market_data_refresh"):
+        return await run_market_research(fields, user_id=user["id"])

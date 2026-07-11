@@ -48,6 +48,15 @@ async function fetchSubscription() {
 
 const DEFAULT_SUB = { plan_key: "explorer", billing_period: "monthly", status: "active" };
 
+async function fetchCreditBalance() {
+  try {
+    const data = await apiRequest("/credits/balance", "GET");
+    return typeof data?.available_credits === "number" ? data.available_credits : null;
+  } catch {
+    return null;
+  }
+}
+
 export const useAuthStore = create((set, get) => ({
   token: null,
   email: null,
@@ -61,6 +70,7 @@ export const useAuthStore = create((set, get) => ({
   platformRestrictions: [],
   platformGrants: [],
   subscription: DEFAULT_SUB,
+  creditBalance: null,
 
   hydrate: async () => {
     const token = localStorage.getItem("ea_token");
@@ -75,11 +85,12 @@ export const useAuthStore = create((set, get) => ({
     // If it's expired the API returns 401 and we clear it now rather than
     // letting protected pages discover it one call at a time.
     try {
-      const [me, restrictions, grants, sub] = await Promise.all([
+      const [me, restrictions, grants, sub, creditBal] = await Promise.all([
         apiRequest("/auth/me", "GET"),
         apiRequest("/auth/restrictions", "GET"),
         fetchPlatformGrants(),
         apiRequest("/plans/my", "GET"),
+        fetchCreditBalance(),
       ]);
       set({
         token,
@@ -91,6 +102,7 @@ export const useAuthStore = create((set, get) => ({
         platformRestrictions: restrictions ?? [],
         platformGrants: grants ?? [],
         subscription: sub ?? DEFAULT_SUB,
+        creditBalance: creditBal,
         hydrated: true,
       });
     } catch {
@@ -106,12 +118,27 @@ export const useAuthStore = create((set, get) => ({
     return sub;
   },
 
+  refreshCreditBalance: async () => {
+    const balance = await fetchCreditBalance();
+    set({ creditBalance: balance });
+    return balance;
+  },
+
   setPlatformRestrictions: (restrictions) => set({ platformRestrictions: restrictions }),
 
   register: async (email, password) => {
     set({ isLoading: true, error: null });
     try {
-      await apiRequest("/auth/register", "POST", { email, password });
+      let referralCode = null, referralClickId = null;
+      try {
+        const stored = JSON.parse(localStorage.getItem("ea_referral") || "null");
+        if (stored?.code && stored?.expires_at && new Date(stored.expires_at) > new Date()) {
+          referralCode = stored.code;
+          referralClickId = stored.click_id || null;
+        }
+      } catch { /* ignore malformed storage */ }
+      await apiRequest("/auth/register", "POST", { email, password, referral_code: referralCode, referral_click_id: referralClickId });
+      if (referralCode) localStorage.removeItem("ea_referral");
       await get().login(email, password);
     } catch (e) {
       set({ error: humanizeAuthError(e) });
@@ -129,11 +156,12 @@ export const useAuthStore = create((set, get) => ({
       localStorage.setItem("ea_token", token);
       localStorage.setItem("ea_email", email);
       set({ token, email });
-      const [me, restrictions, grants, sub] = await Promise.all([
+      const [me, restrictions, grants, sub, creditBal] = await Promise.all([
         apiRequest("/auth/me", "GET").catch(() => null),
         fetchPlatformRestrictions(),
         fetchPlatformGrants(),
         fetchSubscription(),
+        fetchCreditBalance(),
       ]);
       set({
         name: me?.name ?? null,
@@ -143,6 +171,7 @@ export const useAuthStore = create((set, get) => ({
         platformRestrictions: restrictions,
         platformGrants: grants ?? [],
         subscription: sub ?? DEFAULT_SUB,
+        creditBalance: creditBal,
       });
     } catch (e) {
       set({ error: humanizeAuthError(e) });
@@ -154,19 +183,29 @@ export const useAuthStore = create((set, get) => ({
   googleLogin: async (credential) => {
     set({ isLoading: true, error: null });
     try {
-      const tokenRes = await apiRequest("/auth/google", "POST", { credential });
+      let referralCode = null, referralClickId = null;
+      try {
+        const stored = JSON.parse(localStorage.getItem("ea_referral") || "null");
+        if (stored?.code && stored?.expires_at && new Date(stored.expires_at) > new Date()) {
+          referralCode = stored.code;
+          referralClickId = stored.click_id || null;
+        }
+      } catch { /* ignore malformed storage */ }
+      const tokenRes = await apiRequest("/auth/google", "POST", { credential, referral_code: referralCode, referral_click_id: referralClickId });
+      if (referralCode) localStorage.removeItem("ea_referral");
       const token = tokenRes?.access_token ?? tokenRes?.token ?? null;
       if (!token) throw new Error("AUTH_RESPONSE_INVALID");
       localStorage.setItem("ea_token", token);
       const me = await apiRequest("/auth/me", "GET");
       localStorage.setItem("ea_email", me.email);
       set({ token, email: me.email, name: me?.name ?? null, picture: me?.picture ?? null, authProvider: me?.auth_provider ?? null, hasPassword: me?.has_password ?? false });
-      const [restrictions, grants, sub] = await Promise.all([
+      const [restrictions, grants, sub, creditBal] = await Promise.all([
         fetchPlatformRestrictions(),
         fetchPlatformGrants(),
         fetchSubscription(),
+        fetchCreditBalance(),
       ]);
-      set({ platformRestrictions: restrictions, platformGrants: grants ?? [], subscription: sub ?? DEFAULT_SUB });
+      set({ platformRestrictions: restrictions, platformGrants: grants ?? [], subscription: sub ?? DEFAULT_SUB, creditBalance: creditBal });
     } catch (e) {
       set({ error: humanizeAuthError(e) });
     } finally {
@@ -179,6 +218,6 @@ export const useAuthStore = create((set, get) => ({
   logout: () => {
     localStorage.removeItem("ea_token");
     localStorage.removeItem("ea_email");
-    set({ token: null, email: null, name: null, picture: null, authProvider: null, hasPassword: false, hydrated: true, platformRestrictions: [], platformGrants: [], subscription: DEFAULT_SUB });
+    set({ token: null, email: null, name: null, picture: null, authProvider: null, hasPassword: false, hydrated: true, platformRestrictions: [], platformGrants: [], subscription: DEFAULT_SUB, creditBalance: null });
   }
 }));

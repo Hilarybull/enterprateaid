@@ -21,6 +21,7 @@ const NAV = [
   { to: "/catalogue", label: "Catalogue", subtitle: "Products & offers", icon: "box", moduleKey: "catalogue" },
   { to: "/financials", label: "Financials", subtitle: "Invoicing & tracking", icon: "cash", moduleKey: "financials" },
   { to: "/marketplace", label: "Marketplace", subtitle: "Discover businesses", icon: "store", moduleKey: null, public: true },
+  { to: "/referrals", label: "Referrals", subtitle: "Earn & track rewards", icon: "gift", moduleKey: null, public: true },
 ];
 
 
@@ -181,6 +182,16 @@ function Icon({ name, className = "h-4 w-4" }) {
         <path d="M10 9H8" />
       </svg>
     );
+  if (name === "gift")
+    return (
+      <svg {...base}>
+        <path d="M20 12v10H4V12" />
+        <path d="M22 7H2v5h20V7Z" />
+        <path d="M12 22V7" />
+        <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7Z" />
+        <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z" />
+      </svg>
+    );
 
   return null;
 }
@@ -272,6 +283,8 @@ export default function Layout() {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [feedbackError, setFeedbackError] = useState(null);
   const [showInviteUpgrade, setShowInviteUpgrade] = useState(false);
+  const creditBalance = useAuthStore((s) => s.creditBalance);
+  const refreshCreditBalance = useAuthStore((s) => s.refreshCreditBalance);
 
   const workspaceName = useWorkspaceStore((s) => s.workspaceName);
   const workspaceLogo = useWorkspaceStore((s) => s.workspaceLogo);
@@ -554,6 +567,23 @@ export default function Layout() {
     };
   }, [token, setCurrency, setDecisionStatus, setDraftIdeaValidation, setDraftServiceIdea, setIdeaValidation, setInputs, setServiceDecisionStatus, setValidation, setWorkspaceId, setWorkspaceLogo, setWorkspaceName, setWorkspaceLoadedAt, setMemberMode, clearMemberMode]);
 
+  useEffect(() => {
+    if (!token) return;
+    refreshCreditBalance();
+
+    // Poll every 30s so balance stays current after AI actions
+    const id = setInterval(refreshCreditBalance, 30_000);
+
+    // Also refresh when the user returns to the tab
+    function onFocus() { refreshCreditBalance(); }
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [token]);
+
   const filteredNav = useMemo(() => {
     const q = String(search || "").trim().toLowerCase();
     const base = !q ? NAV : NAV.filter((i) => `${i.label} ${i.subtitle}`.toLowerCase().includes(q));
@@ -679,7 +709,8 @@ export default function Layout() {
           </>
         ) : (
           <>
-            <div className="mt-2 flex items-center gap-2">
+            {/* Row: plan badge + credits pill */}
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => navigate("/pricing")}
@@ -695,6 +726,14 @@ export default function Layout() {
                 </svg>
                 {planLabel(subscription?.plan_key, subscription?.status)}
               </button>
+              {creditBalance !== null && (
+                <div className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 dark:bg-violet-900/20 dark:text-violet-400">
+                  <svg className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                  </svg>
+                  {creditBalance}
+                </div>
+              )}
               {(!subscription?.plan_key || ["free_trial", "explorer"].includes(subscription.plan_key)) && (
                 <button
                   type="button"
@@ -705,13 +744,12 @@ export default function Layout() {
                 </button>
               )}
             </div>
-            <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              {acceptedAny
-                ? "Workspace verified"
-                : rejectedAny
-                  ? "Needs review"
-                  : "Setup in progress"}
-            </div>
+            {/* Status line — only show when there's a meaningful status */}
+            {(acceptedAny || rejectedAny) && (
+              <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                {acceptedAny ? "Workspace verified" : "Needs review"}
+              </div>
+            )}
             {showInviteUpgrade ? (
               <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/40 dark:bg-amber-900/20">
                 <p className="text-[12px] font-semibold text-amber-800 dark:text-amber-300">Upgrade to invite members</p>

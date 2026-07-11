@@ -45,17 +45,28 @@ export async function apiRequest(path, method, body, options) {
     }
     
     let message = `Request failed`;
+    let errorDetail = null;
     try {
       const data = await res.json();
-      if (typeof data?.detail === "string") message = data.detail;
-      else if (Array.isArray(data?.detail) && data.detail[0]?.msg) message = data.detail[0].msg;
-      else if (typeof data?.message === "string") message = data.message;
-      else message = JSON.stringify(data);
+      if (typeof data?.detail === "string") {
+        message = data.detail;
+      } else if (Array.isArray(data?.detail) && data.detail[0]?.msg) {
+        message = data.detail[0].msg;
+      } else if (data?.detail && typeof data.detail === "object") {
+        errorDetail = data.detail;
+        message = data.detail.message || data.detail.error || JSON.stringify(data.detail);
+      } else if (typeof data?.message === "string") {
+        message = data.message;
+      } else {
+        message = JSON.stringify(data);
+      }
     } catch {
       const text = await res.text().catch(() => "");
       if (text) message = text;
     }
-    throw new Error(`HTTP ${res.status}: ${message}`);
+    const err = new Error(`HTTP ${res.status}: ${message}`);
+    if (errorDetail) err.detail = errorDetail;
+    throw err;
   }
 
   // Some endpoints might return empty body

@@ -98,6 +98,74 @@ function downloadCSV(rows, columns, filename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadUserAIReport(userEmail, events) {
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const row = (...cells) => cells.map(q).join(",");
+
+  // summary
+  const totalCalls = events.length;
+  const totalIn = events.reduce((s, r) => s + (r.input_tokens || 0), 0);
+  const totalOut = events.reduce((s, r) => s + (r.output_tokens || 0), 0);
+  const totalTokens = events.reduce((s, r) => s + (r.total_tokens || 0), 0);
+  const totalCost = events.reduce((s, r) => s + parseFloat(r.estimated_cost_usd || 0), 0);
+
+  // by feature
+  const featureMap = {};
+  for (const r of events) {
+    const f = r.feature || "unknown";
+    if (!featureMap[f]) featureMap[f] = { calls: 0, in: 0, out: 0, tokens: 0, cost: 0 };
+    featureMap[f].calls += 1;
+    featureMap[f].in += r.input_tokens || 0;
+    featureMap[f].out += r.output_tokens || 0;
+    featureMap[f].tokens += r.total_tokens || 0;
+    featureMap[f].cost += parseFloat(r.estimated_cost_usd || 0);
+  }
+  const featureRows = Object.entries(featureMap)
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([f, d]) => row(f, d.calls, d.in, d.out, d.tokens, d.cost.toFixed(6)));
+
+  // event log
+  const eventRows = [...events]
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map((r) => row(
+      formatDateTime(r.created_at),
+      r.feature || "unknown",
+      r.provider,
+      r.model,
+      r.input_tokens || 0,
+      r.output_tokens || 0,
+      r.total_tokens || 0,
+      Number(r.estimated_cost_usd || 0).toFixed(6),
+    ));
+
+  const lines = [
+    row("AI Usage Report", userEmail),
+    row("Generated", new Date().toLocaleString()),
+    "",
+    row("SUMMARY"),
+    row("Total Calls", "Input Tokens", "Output Tokens", "Total Tokens", "Est. Cost (USD)"),
+    row(totalCalls, totalIn, totalOut, totalTokens, totalCost.toFixed(6)),
+    "",
+    row("BY FEATURE"),
+    row("Feature", "Calls", "Input Tokens", "Output Tokens", "Total Tokens", "Est. Cost (USD)"),
+    ...featureRows,
+    "",
+    row("EVENT LOG"),
+    row("Time", "Feature", "Provider", "Model", "Input Tokens", "Output Tokens", "Total Tokens", "Cost (USD)"),
+    ...eventRows,
+  ];
+
+  const csv = lines.join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const safe = userEmail.replace(/[^a-z0-9]/gi, "_");
+  a.download = `ai-report-${safe}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Small components ──────────────────────────────────────────────────────────
 
 function StatusBadge({ status }) {
@@ -2310,6 +2378,15 @@ export default function AdminPage() {
               )}
               {hasFilters && <button type="button" onClick={clearFilters} className="text-[12px] font-medium text-brand-600 hover:text-brand-700">Clear</button>}
               <span className="ml-auto text-[11px] text-slate-400">{filtered.length}{hasFilters ? ` of ${allEvents.length}` : ""} events</span>
+              {aiUserFilter && (
+                <button
+                  type="button"
+                  onClick={() => downloadUserAIReport(aiUserFilter, filtered)}
+                  className="flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-[12px] font-medium text-brand-700 transition hover:bg-brand-100"
+                >
+                  <DownloadIcon /> Export user report
+                </button>
+              )}
             </div>
 
             {/* ── Row 2: 5 KPI tiles ── */}
@@ -2399,18 +2476,27 @@ export default function AdminPage() {
                   <div className="divide-y divide-slate-50">
                     <div className="flex items-center justify-between pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       <span>User</span>
-                      <span className="flex gap-5 pr-1"><span>Calls</span><span>Tokens</span><span>Cost</span></span>
+                      <span className="flex gap-5 pr-1"><span>Calls</span><span>Tokens</span><span>Cost</span><span className="w-6"></span></span>
                     </div>
-                    {byUser.map((row) => (
-                      <div key={row.email} className="flex items-center justify-between gap-2 py-1.5 text-[12px]">
-                        <span className="truncate font-mono text-[11px] text-slate-700">{row.email}</span>
-                        <span className="flex shrink-0 gap-5 tabular-nums text-slate-500">
-                          <span className="w-8 text-right">{row.calls}</span>
-                          <span className="w-16 text-right">{row.tokens.toLocaleString()}</span>
-                          <span className="w-16 text-right font-semibold text-slate-700">${row.cost.toFixed(4)}</span>
-                        </span>
-                      </div>
-                    ))}
+                    {byUser.map((row) => {
+                      const userEvents = filtered.filter((r) => (r.user_email || r.user_id) === row.email);
+                      return (
+                        <div key={row.email} className="flex items-center justify-between gap-2 py-1.5 text-[12px]">
+                          <span className="truncate font-mono text-[11px] text-slate-700">{row.email}</span>
+                          <span className="flex shrink-0 items-center gap-5 tabular-nums text-slate-500">
+                            <span className="w-8 text-right">{row.calls}</span>
+                            <span className="w-16 text-right">{row.tokens.toLocaleString()}</span>
+                            <span className="w-16 text-right font-semibold text-slate-700">${row.cost.toFixed(4)}</span>
+                            <button
+                              type="button"
+                              title={`Export report for ${row.email}`}
+                              onClick={() => downloadUserAIReport(row.email, userEvents)}
+                              className="text-slate-400 hover:text-brand-600 transition"
+                            ><DownloadIcon /></button>
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : <p className="text-xs text-slate-400">No data yet.</p>}
               </section>

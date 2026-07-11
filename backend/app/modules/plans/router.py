@@ -470,7 +470,148 @@ async def stripe_webhook(request: Request):
                 on_conflict="user_id",
             )
 
+    elif etype == "invoice.payment_succeeded":
+        await _handle_invoice_payment(event)
+
+    elif etype in ("charge.refunded", "invoice.payment_failed"):
+        await _handle_refund_or_failure(event, etype)
+
     return {"received": True}
+
+
+async def _handle_invoice_payment(event) -> None:
+    """Create a pending referral reward when an eligible invoice is paid."""
+    try:
+        from app.modules.referral import service as ref_svc
+
+        inv = event["data"]["object"] if isinstance(event, dict) else event.data.object
+        invoice_id = inv.get("id") if isinstance(inv, dict) else inv.id
+        customer_id = inv.get("customer") if isinstance(inv, dict) else getattr(inv, "customer", None)
+        sub_id = inv.get("subscription") if isinstance(inv, dict) else getattr(inv, "subscription", None)
+        amount_paid = inv.get("amount_paid", 0) if isinstance(inv, dict) else getattr(inv, "amount_paid", 0)
+        subtotal = inv.get("subtotal", 0) if isinstance(inv, dict) else getattr(inv, "subtotal", 0)
+        tax = inv.get("tax", 0) if isinstance(inv, dict) else getattr(inv, "tax", 0)
+
+        if not customer_id or not invoice_id or amount_paid <= 0:
+            return
+
+        # Find the user from stripe_customer_id
+        sub_row = await sb_select(
+            "user_subscriptions",
+            filters=[("stripe_customer_id", "eq", customer_id)],
+            single=True,
+        )
+        if not sub_row:
+            return
+        user_id = sub_row["user_id"]
+
+        # Find referral attribution for this user (were they referred?)
+        attribution = await ref_svc.get_attribution_for_referred(user_id)
+        if not attribution:
+            return
+
+        referrer_id = attribution["referrer_user_id"]
+
+        # Check referrer is an active participant
+        participant = await sb_select(
+            "referral_participants",
+            filters=[("user_id", "eq", referrer_id), ("status", "eq", "active")],
+            single=True,
+        )
+        if not participant:
+            return
+
+        # Check if this is first payment only or recurring
+        config = await ref_svc.get_active_config()
+        if not config.get("recurring", True):
+            existing_rewards = await sb_select(
+                "referral_reward_entries",
+                filters=[("attribution_id", "eq", attribution["id"])],
+            )
+            if existing_rewards:
+                return  # first-payment-only mode: skip renewals
+
+        # eligible_base = max(0, subtotal - tax - refunded)
+        eligible_base = max(0, subtotal - (tax or 0))
+        if eligible_base <= 0:
+            return
+
+        commission = ref_svc.calculate_commission(eligible_base, config["rate_bps"])
+        if commission <= 0:
+            return
+
+        idem_key = f"invoice_{invoice_id}"
+        snapshot = {
+            "rate_bps": config["rate_bps"],
+            "eligible_base_minor": eligible_base,
+            "subtotal_minor": subtotal,
+            "tax_minor": tax,
+            "commission_minor": commission,
+            "invoice_id": invoice_id,
+        }
+        await ref_svc.create_pending_reward(
+            referrer_user_id=referrer_id,
+            attribution_id=attribution["id"],
+            amount_minor=commission,
+            idempotency_key=idem_key,
+            config_version_id=config.get("id"),
+            calc_snapshot=snapshot,
+            stripe_invoice_id=invoice_id,
+            stripe_subscription_id=sub_id,
+            hold_days=config["hold_days"],
+        )
+        logger.info(
+            "referral reward created referrer=%s referred=%s commission_minor=%s invoice=%s",
+            referrer_id, user_id, commission, invoice_id,
+        )
+    except Exception as exc:
+        logger.error("_handle_invoice_payment error: %s", exc)
+
+
+async def _handle_refund_or_failure(event, etype: str) -> None:
+    """Create a linked reversal when an invoice is refunded or charge reversed."""
+    try:
+        from app.modules.referral import service as ref_svc
+
+        obj = event["data"]["object"] if isinstance(event, dict) else event.data.object
+
+        if etype == "charge.refunded":
+            invoice_id = obj.get("invoice") if isinstance(obj, dict) else getattr(obj, "invoice", None)
+            refunded_minor = obj.get("amount_refunded", 0) if isinstance(obj, dict) else getattr(obj, "amount_refunded", 0)
+        else:
+            invoice_id = obj.get("id") if isinstance(obj, dict) else getattr(obj, "id", None)
+            refunded_minor = obj.get("amount_due", 0) if isinstance(obj, dict) else getattr(obj, "amount_due", 0)
+
+        if not invoice_id:
+            return
+
+        # Find the original reward entry for this invoice
+        original = await sb_select(
+            "referral_reward_entries",
+            filters=[("stripe_invoice_id", "eq", invoice_id), ("type", "eq", "reward")],
+            single=True,
+        )
+        if not original:
+            return
+
+        # Calculate proportional reversal
+        orig_snapshot = original.get("calc_snapshot") or {}
+        orig_base = orig_snapshot.get("eligible_base_minor", 0)
+        config = await ref_svc.get_active_config()
+        reversal_minor = -ref_svc.calculate_commission(min(refunded_minor, orig_base), config["rate_bps"])
+
+        idem_key = f"reversal_{invoice_id}_{etype}"
+        await ref_svc.create_reversal(
+            referrer_user_id=original["participant_user_id"],
+            attribution_id=original["attribution_id"],
+            amount_minor=reversal_minor,
+            idempotency_key=idem_key,
+            source_entry_id=original["id"],
+            reason=etype,
+        )
+        logger.info("referral reversal created for invoice=%s reversal_minor=%s", invoice_id, reversal_minor)
+    except Exception as exc:
+        logger.error("_handle_refund_or_failure error: %s", exc)
 
 
 # ── Authenticated: get current subscription ───────────────────────────────────

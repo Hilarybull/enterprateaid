@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -61,6 +62,40 @@ def _get_credentials(provider: str) -> tuple[str, str]:
     raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
 
+def _merge_by_external_id(existing: list[dict], incoming: list[dict]) -> tuple[list[dict], int]:
+    result = list(existing or [])
+    added = 0
+    index: dict[str, int] = {}
+    for idx, item in enumerate(result):
+        key = str(item.get("quickbooks_id") or item.get("id") or "")
+        if key:
+            index[key] = idx
+
+    for item in incoming:
+        key = str(item.get("quickbooks_id") or item.get("id") or "")
+        if key and key in index:
+            current = result[index[key]]
+            result[index[key]] = {**current, **item, "created_at": current.get("created_at") or item.get("created_at")}
+        else:
+            result.insert(0, item)
+            added += 1
+    return result, added
+
+
+async def _persist_refreshed_token(row: dict, updated_meta: dict | None) -> None:
+    if not updated_meta:
+        return
+    await sb_update(
+        "integration_tokens",
+        payload={
+            "access_token": updated_meta.get("access_token", row.get("access_token", "")),
+            "refresh_token": updated_meta.get("refresh_token", row.get("refresh_token", "")),
+            "token_expiry": updated_meta.get("token_expiry", row.get("token_expiry", "")),
+        },
+        filters=[("id", "eq", row["id"])],
+    )
+
+
 async def _load_token_row(user_id: str, provider: str) -> dict | None:
     try:
         return await sb_select("integration_tokens", filters=[("user_id", "eq", user_id), ("provider", "eq", provider)], single=True)
@@ -110,13 +145,50 @@ async def connect(provider: Provider, user=Depends(get_current_user)) -> dict:
     else:
         url = zoho_mod.auth_url(client_id, redirect_uri, state)
 
+    parsed_url = urlparse(url)
+    logger.info(
+        "OAuth connect URL generated provider=%s auth_host=%s redirect_uri=%s client_id_prefix=%s",
+        provider,
+        parsed_url.netloc,
+        redirect_uri,
+        client_id[:9] if client_id else "",
+    )
+
     return {"auth_url": url, "provider": provider}
+
+
+@router.get("/{provider}/oauth-debug")
+async def oauth_debug(provider: Provider) -> dict:
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown provider.")
+
+    client_id, client_secret = _get_credentials(provider)
+    redirect_uri = _redirect_uri(provider)
+    state = "debug-state"
+
+    if provider == "quickbooks":
+        url = qb.auth_url(client_id, redirect_uri, state)
+    elif provider == "xero":
+        url = xero_mod.auth_url(client_id, redirect_uri, state)
+    else:
+        url = zoho_mod.auth_url(client_id, redirect_uri, state)
+
+    parsed_url = urlparse(url)
+    return {
+        "provider": provider,
+        "configured": bool(client_id and client_secret),
+        "auth_host": parsed_url.netloc,
+        "redirect_uri": redirect_uri,
+        "client_id_prefix": client_id[:9] if client_id else "",
+        "client_id_suffix": client_id[-4:] if client_id else "",
+        "client_id_length": len(client_id),
+    }
 
 
 # ── Callback — exchange code, store tokens, redirect to frontend ───────────────
 
 @router.get("/{provider}/callback", include_in_schema=False)
-async def callback(provider: Provider, code: str = "", state: str = "", error: str = ""):
+async def callback(provider: Provider, code: str = "", state: str = "", realmId: str = "", error: str = ""):
     frontend = _frontend_url()
 
     if error or not code or not state:
@@ -139,6 +211,7 @@ async def callback(provider: Provider, code: str = "", state: str = "", error: s
             # QB also sends realmId in the callback query string — we receive it via **kwargs
             # It's accessible via the request; for now store it from the token response
             tokens = await qb.exchange_code(client_id, client_secret, code, redirect_uri)
+            tokens["realmId"] = realmId
         elif provider == "xero":
             tokens = await xero_mod.exchange_code(client_id, client_secret, code, redirect_uri)
         else:
@@ -148,7 +221,7 @@ async def callback(provider: Provider, code: str = "", state: str = "", error: s
         return RedirectResponse(f"{frontend}/integrations/callback?provider={provider}&status=error&reason=exchange_failed")
 
     try:
-        await _save_tokens(user_id, provider, tokens)
+        await _save_tokens(user_id, provider, tokens, extra_meta={"realm_id": realmId} if provider == "quickbooks" else None)
     except Exception as e:
         logger.error("Failed to store tokens for %s/%s: %s", provider, user_id, e)
         return RedirectResponse(f"{frontend}/integrations/callback?provider={provider}&status=error&reason=storage_failed")
@@ -220,6 +293,79 @@ async def disconnect(provider: Provider, user=Depends(get_current_user)) -> dict
     except Exception as e:
         logger.warning("Disconnect %s failed: %s", provider, e)
     return {"disconnected": True, "provider": provider}
+
+
+# ── Import FROM provider INTO workspace ──────────────────────────────────────
+
+_IMPORT_SUPPORTED = {"quickbooks"}
+
+@router.post("/{provider}/import")
+async def import_data(provider: Provider, user=Depends(get_current_user)) -> dict:
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown provider.")
+    if provider not in _IMPORT_SUPPORTED:
+        raise HTTPException(status_code=400, detail=f"Import from {PROVIDERS[provider]['label']} is not yet supported.")
+
+    row = await _load_token_row(user["id"], provider)
+    if not row or not row.get("access_token"):
+        raise HTTPException(status_code=400, detail=f"{PROVIDERS[provider]['label']} is not connected.")
+
+    client_id, client_secret = _get_credentials(provider)
+    meta = {
+        "access_token": row["access_token"],
+        "refresh_token": row.get("refresh_token", ""),
+        "token_expiry": row.get("token_expiry", ""),
+        "tenant_id": (row.get("metadata") or {}).get("tenant_id", ""),
+        "realm_id": (row.get("metadata") or {}).get("realm_id", ""),
+    }
+
+    result = await qb.import_workspace_data(meta, client_id, client_secret)
+
+    await _persist_refreshed_token(row, result.get("updated_meta"))
+
+    # Merge imported data into workspace
+    from app.modules.idea_validation.service import get_user_workspace, upsert_user_workspace
+
+    ws = await get_user_workspace(user_id=user["id"])
+    ws_data = (ws.data or {}) if ws else {}
+
+    imported_catalogue = result.get("catalogue", {})
+    imported_financials = result.get("financials", {})
+
+    catalogue = dict(ws_data.get("catalogue", {}))
+    for key, new_items in imported_catalogue.items():
+        existing = catalogue.get(key, [])
+        merged, _ = _merge_by_external_id(existing, new_items)
+        catalogue[key] = merged
+
+    financials = dict(ws_data.get("financials", {}))
+    for key, new_items in imported_financials.items():
+        existing = financials.get(key, [])
+        merged, _ = _merge_by_external_id(existing, new_items)
+        financials[key] = merged
+
+    patch: dict = {}
+    if catalogue:
+        patch["catalogue"] = catalogue
+    if financials:
+        patch["financials"] = financials
+    if patch:
+        await upsert_user_workspace(user_id=user["id"], data_patch=patch)
+
+    try:
+        await sb_update(
+            "integration_tokens",
+            payload={"last_sync_at": datetime.now(timezone.utc).isoformat()},
+            filters=[("user_id", "eq", user["id"]), ("provider", "eq", provider)],
+        )
+    except Exception:
+        pass
+
+    return {
+        "imported": result.get("imported", {}),
+        "errors": result.get("errors", []),
+        "provider": provider,
+    }
 
 
 # ── Sync ──────────────────────────────────────────────────────────────────────

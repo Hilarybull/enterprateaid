@@ -15,6 +15,45 @@ from app.shared.email.sendgrid import send_password_reset_email
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+async def _try_attribute(*, referred_user_id: str, referral_code: str, click_id: str | None) -> None:
+    """Create referral attribution after new user creation. Silently no-ops on any error."""
+    from app.modules.referral import service as ref_svc
+    from datetime import datetime, timezone
+
+    # Self-referral guard
+    participant = await ref_svc.get_participant_by_code(referral_code)
+    if not participant or participant["user_id"] == referred_user_id:
+        return
+
+    # Already attributed?
+    existing_attr = await ref_svc.get_attribution_for_referred(referred_user_id)
+    if existing_attr:
+        return
+
+    # Validate click expiry if click_id provided
+    method = "manual_code"
+    valid_click_id = None
+    if click_id:
+        from app.core.supabase import sb_select as _sb_select
+        click = await _sb_select("referral_clicks", filters=[("id", "eq", click_id)], single=True)
+        if click and click.get("referral_code") == referral_code:
+            expires_raw = click.get("expires_at", "")
+            expires = datetime.fromisoformat(expires_raw.replace("Z", "+00:00")) if expires_raw else None
+            if expires and expires >= datetime.now(timezone.utc):
+                valid_click_id = click_id
+                method = "click"
+                # Mark click as converted
+                from app.core.supabase import sb_update as _sb_update
+                await _sb_update("referral_clicks", filters=[("id", "eq", click_id)], payload={"converted": True})
+
+    await ref_svc.create_attribution(
+        referred_user_id=referred_user_id,
+        referrer_user_id=participant["user_id"],
+        click_id=valid_click_id,
+        method=method,
+    )
+
+
 @router.post("/register", response_model=UserPublic)
 async def register(payload: RegisterRequest) -> UserPublic:
     existing = await sb_select("users", filters=[("email", "eq", payload.email.lower())], single=True)
@@ -22,6 +61,16 @@ async def register(payload: RegisterRequest) -> UserPublic:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     user_doc = {"id": payload.email.lower(), "email": payload.email.lower(), "password_hash": hash_password(payload.password)}
     await sb_insert("users", user_doc)
+    # Referral attribution — best-effort, never blocks registration
+    if payload.referral_code:
+        try:
+            await _try_attribute(
+                referred_user_id=user_doc["id"],
+                referral_code=payload.referral_code,
+                click_id=payload.referral_click_id,
+            )
+        except Exception:
+            pass
     return UserPublic(id=user_doc["id"], email=user_doc["email"])
 
 
@@ -66,6 +115,16 @@ async def google_auth(payload: GoogleAuthRequest) -> TokenResponse:
         )
 
     token = create_access_token(subject=identity.email)
+    # Attribution for new Google users
+    if not existing and payload.referral_code:
+        try:
+            await _try_attribute(
+                referred_user_id=identity.email,
+                referral_code=payload.referral_code,
+                click_id=payload.referral_click_id,
+            )
+        except Exception:
+            pass
     return TokenResponse(access_token=token)
 
 

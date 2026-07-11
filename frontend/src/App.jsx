@@ -37,6 +37,8 @@ import IntegrationsCallbackPage from "./pages/IntegrationsCallbackPage";
 import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
 import TermsOfServicePage from "./pages/TermsOfServicePage";
 import DisclaimerPage from "./pages/DisclaimerPage";
+import ReferralClickPage from "./pages/ReferralClickPage";
+import ReferralPage from "./pages/ReferralPage";
 
 function Protected({ children }) {
   const token = useAuthStore((s) => s.token);
@@ -79,6 +81,7 @@ export default function App() {
       <Route path="/legal/disclaimer" element={<DisclaimerPage />} />
       <Route path="/share/:token" element={<SharedBlueprintPage />} />
       <Route path="/join/:token" element={<JoinPage />} />
+      <Route path="/r/:code" element={<ReferralClickPage />} />
       <Route
         path="/"
         element={
@@ -97,6 +100,7 @@ export default function App() {
         <Route path="financials" element={<FinancialsPage />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="account" element={<AccountPage />} />
+        <Route path="referrals" element={<ReferralPage />} />
       </Route>
       <Route
         path="ent-admin"

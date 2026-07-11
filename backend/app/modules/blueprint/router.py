@@ -34,8 +34,15 @@ from app.modules.blueprint.share_repository import (
 )
 from app.shared.email.sendgrid import send_document_share_email
 from app.shared.auth.deps import get_current_user
+from app.modules.credits.service import credit_guard
 
 router = APIRouter(prefix="/blueprint", tags=["blueprint"])
+
+_BLUEPRINT_CREDIT_FEATURE = {
+    "business_plan": "business_plan_full",
+    "client_proposal": "proposal_full",
+    "sales_letter": "sales_letter_full",
+}
 
 
 def _shared_document_url(token: str) -> str:
@@ -97,16 +104,10 @@ async def blueprint_generate(
 ) -> BlueprintGenerateResponse:
     user_id: str = user["id"]
 
-    if payload.type == "business_plan":
-        plan_key, plan_status = await get_user_plan_info(user_id)
-        if plan_key in _FREE_PLAN_KEYS or plan_status in {"trial", "expired"}:
-            existing = await list_documents(user_id=user_id, type="business_plan", limit=2)
-            if len(existing) >= _LIFETIME_BLUEPRINT_LIMIT:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You have used your free lifetime business plan. Upgrade to generate more.",
-                )
-
+    feature_code = _BLUEPRINT_CREDIT_FEATURE.get(payload.type)
+    if feature_code:
+        async with credit_guard(user_id, feature_code):
+            return await generate_blueprint(payload, user_id=user_id)
     return await generate_blueprint(payload, user_id=user_id)
 
 
@@ -461,9 +462,10 @@ async def suggest_blueprint_field(
         f"Provide a short, professional text for the '{payload.field}' field. Context: {ctx}. Return only the text, no labels.",
     )
 
-    try:
-        res = await llm.generate_text(system=SYSTEM_POLICY, prompt=prompt, feature="blueprint.suggest_field")
-        text = (res.text or "").strip()
-        return {"value": text}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI suggestion failed: {e}")
+    async with credit_guard(user["id"], "suggest_field"):
+        try:
+            res = await llm.generate_text(system=SYSTEM_POLICY, prompt=prompt, feature="blueprint.suggest_field")
+            text = (res.text or "").strip()
+            return {"value": text}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"AI suggestion failed: {e}")

@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { apiRequest } from "../api/client";
 
+const IMPORT_SUPPORTED = new Set(["quickbooks"]);
+
 const PROVIDER_INFO = {
   quickbooks: {
     label: "QuickBooks",
-    description: "Sync invoices, expenses, customers and vendors to QuickBooks Online.",
+    description: "Import customers, vendors, invoices and expenses from QuickBooks Online.",
     logo: (
       <svg viewBox="0 0 40 40" className="h-8 w-8">
         <rect width="40" height="40" rx="8" fill="#2CA01C" />
@@ -41,10 +43,12 @@ function fmtDate(iso) {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function ProviderCard({ provider, info, status, onConnect, onDisconnect, onSync, actionLoading }) {
+function ProviderCard({ provider, info, status, onConnect, onDisconnect, onSync, onImport, actionLoading }) {
   const connected = status?.connected;
   const isSyncing = actionLoading === `sync_${provider}`;
-  const loading = actionLoading === provider || isSyncing;
+  const isImporting = actionLoading === `import_${provider}`;
+  const loading = actionLoading === provider || isSyncing || isImporting;
+  const supportsImport = IMPORT_SUPPORTED.has(provider);
 
   return (
     <div className={`rounded-2xl border p-5 transition ${connected ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-900/10" : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"}`}>
@@ -65,19 +69,29 @@ function ProviderCard({ provider, info, status, onConnect, onDisconnect, onSync,
             <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Last synced: {fmtDate(status.last_sync_at)}</p>
           )}
           {connected && !status?.last_sync_at && (
-            <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Never synced — click Sync Now to push your data.</p>
+            <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Connected — click Import to pull your data.</p>
           )}
         </div>
         <div className="flex shrink-0 flex-col gap-2">
           {connected ? (
             <>
+              {supportsImport && (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => onImport(provider)}
+                  className="rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-50"
+                >
+                  {isImporting ? "Importing…" : "Import"}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={loading}
                 onClick={() => onSync(provider)}
-                className="rounded-xl bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-700 disabled:opacity-50"
+                className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-100 disabled:opacity-50"
               >
-                {isSyncing ? "Syncing…" : "Sync Now"}
+                {isSyncing ? "Syncing…" : "Push to QB"}
               </button>
               <button
                 type="button"
@@ -160,7 +174,22 @@ export default function IntegrationPanel({ providers }) {
     setError("");
     try {
       const res = await apiRequest(`/integrations/${provider}/sync`, "POST", undefined, { timeoutMs: 120000 });
-      setSyncResult(res);
+      setSyncResult({ ...res, mode: "sync" });
+      await loadStatuses();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleImport(provider) {
+    setActionLoading(`import_${provider}`);
+    setSyncResult(null);
+    setError("");
+    try {
+      const res = await apiRequest(`/integrations/${provider}/import`, "POST", undefined, { timeoutMs: 120000 });
+      setSyncResult({ ...res, mode: "import" });
       await loadStatuses();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -178,7 +207,25 @@ export default function IntegrationPanel({ providers }) {
       )}
       {syncResult && (
         <div className={`rounded-xl border px-4 py-3 text-xs ${syncResult.errors?.length ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400" : "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400"}`}>
-          <strong>{syncResult.synced} records synced</strong> to {PROVIDER_INFO[syncResult.provider]?.label}.
+          {syncResult.mode === "import" ? (() => {
+            const imp = syncResult.imported || {};
+            const total = Object.values(imp).reduce((s, n) => s + (n || 0), 0);
+            return (
+              <>
+                <strong>{total} records imported</strong> from {PROVIDER_INFO[syncResult.provider]?.label}.
+                {total > 0 && (
+                  <span className="ml-1 text-[11px]">
+                    ({Object.entries(imp).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(", ")})
+                  </span>
+                )}
+                {total === 0 && !syncResult.errors?.length && (
+                  <span className="ml-1 text-[11px]">No new data found in {PROVIDER_INFO[syncResult.provider]?.label}.</span>
+                )}
+              </>
+            );
+          })() : (
+            <strong>{syncResult.synced} records synced</strong>
+          )}
           {syncResult.errors?.length > 0 && (
             <ul className="mt-1 space-y-0.5 text-[11px]">
               {syncResult.errors.map((e, i) => <li key={i}>⚠ {e}</li>)}
@@ -198,6 +245,7 @@ export default function IntegrationPanel({ providers }) {
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
             onSync={handleSync}
+            onImport={handleImport}
             actionLoading={actionLoading}
           />
         );
