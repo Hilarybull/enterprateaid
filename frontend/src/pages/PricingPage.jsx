@@ -907,9 +907,11 @@ function PlanCard({ plan, billing, onAction, currentPlanKey }) {
             </span>
           )}
         </div>
-        <p className="mt-1 text-[13px] text-slate-500 dark:text-slate-400">
-          {plan.tagline}
-        </p>
+        {plan.tagline && (
+          <p className="mt-1 text-[13px] text-slate-500 dark:text-slate-400">
+            {plan.tagline}
+          </p>
+        )}
       </div>
 
       <div className="mb-6">

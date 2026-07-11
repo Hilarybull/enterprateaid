@@ -823,7 +823,7 @@ export default function LandingPage() {
                 ) : (
                   <p className="text-xs text-slate-400">Billed monthly</p>
                 )}
-                <p className="mt-2 text-xs text-slate-500">{plan.desc}</p>
+                {!plan.free && <p className="mt-2 text-xs text-slate-500">{plan.desc}</p>}
                 <ul className="mt-5 space-y-2.5">
                   {plan.features.map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-slate-600">
