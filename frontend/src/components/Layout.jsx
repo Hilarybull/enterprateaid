@@ -21,7 +21,6 @@ const NAV = [
   { to: "/catalogue", label: "Catalogue", subtitle: "Products & offers", icon: "box", moduleKey: "catalogue" },
   { to: "/financials", label: "Financials", subtitle: "Invoicing & tracking", icon: "cash", moduleKey: "financials" },
   { to: "/marketplace", label: "Marketplace", subtitle: "Discover businesses", icon: "store", moduleKey: null, public: true },
-  { to: "/referrals", label: "Referrals", subtitle: "Earn & track rewards", icon: "gift", moduleKey: null, public: true },
 ];
 
 
