@@ -4,7 +4,7 @@ export const PLANS = [
   {
     key: "explorer",
     label: "Explorer",
-    tagline: "No card needed",
+    tagline: "No payment card required",
     monthlyPrice: 0,
     annualPrice: 0,
     annualSaving: 0,

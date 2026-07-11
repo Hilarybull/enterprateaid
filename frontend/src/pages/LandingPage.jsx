@@ -80,7 +80,7 @@ const PLANS = [
     annual: 0,
     annualSaving: 0,
     free: true,
-    desc: "Test the platform. No card needed.",
+    desc: "No payment card required.",
     features: [
       "50 one-time AI credits",
       "Idea Validation",
@@ -232,7 +232,7 @@ export default function LandingPage() {
             >
               Maybe later
             </button>
-            <p className="mt-3 text-center text-xs text-slate-400">Free plan · No credit card required</p>
+            <p className="mt-3 text-center text-xs text-slate-400">Free plan · No payment card required</p>
           </div>
         </div>
       )}
@@ -331,7 +331,7 @@ export default function LandingPage() {
 
               <div className="mt-5 flex flex-wrap gap-4 text-sm text-indigo-200">
                 <span className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> Free to start</span>
-                <span className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> No credit card required</span>
+                <span className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> No payment card required</span>
                 <span className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> One workspace for everything</span>
               </div>
             </div>
@@ -745,7 +745,7 @@ export default function LandingPage() {
           >
             Get Started Free →
           </button>
-          <p className="mt-3 text-xs text-brand-200">No credit card required · Free to start · Cancel anytime</p>
+          <p className="mt-3 text-xs text-brand-200">No payment card required · Free to start · Cancel anytime</p>
         </div>
       </section>
 
@@ -784,7 +784,7 @@ export default function LandingPage() {
           <div className="mb-10 text-center">
             <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">Pricing</span>
             <h2 className="mt-3 text-2xl font-extrabold text-slate-900 sm:text-3xl">Simple, Transparent Pricing</h2>
-            <p className="mt-3 text-slate-500">Start free on the Explorer plan. No credit card required.</p>
+            <p className="mt-3 text-slate-500">Start free on the Explorer plan. No payment card required.</p>
             <div className="mt-5 inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
               <button type="button" onClick={() => setAnnualBilling(false)} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${!annualBilling ? "bg-brand-600 text-white" : "text-slate-500 hover:text-slate-700"}`}>Monthly</button>
               <button type="button" onClick={() => setAnnualBilling(true)} className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${annualBilling ? "bg-brand-600 text-white" : "text-slate-500 hover:text-slate-700"}`}>
@@ -817,7 +817,7 @@ export default function LandingPage() {
                   )}
                 </div>
                 {plan.free ? (
-                  <p className="text-xs font-medium text-emerald-600">No credit card required</p>
+                  <p className="text-xs font-medium text-emerald-600">No payment card required</p>
                 ) : annualBilling ? (
                   <p className="text-xs text-emerald-600">Billed annually (save £{plan.annualSaving}/yr)</p>
                 ) : (
@@ -878,7 +878,7 @@ export default function LandingPage() {
           </button>
           <div className="mt-6 flex flex-wrap justify-center gap-4 text-xs text-slate-400">
             <span>✓ Free to start</span>
-            <span>✓ No credit card required</span>
+            <span>✓ No payment card required</span>
             <span>✓ Cancel anytime</span>
             <span>✓ GDPR compliant</span>
           </div>

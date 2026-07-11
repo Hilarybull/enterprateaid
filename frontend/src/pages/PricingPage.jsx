@@ -925,7 +925,7 @@ function PlanCard({ plan, billing, onAction, currentPlanKey }) {
         </div>
         {isFree ? (
           <p className="mt-1 text-[13px] font-medium text-emerald-600 dark:text-emerald-400">
-            No credit card required
+            No payment card required
           </p>
         ) : billing === BILLING.annual && plan.annualSaving > 0 ? (
           <p className="mt-1 text-[13px] font-medium text-emerald-600 dark:text-emerald-400">
@@ -1042,7 +1042,7 @@ export default function PricingPage() {
             Simple, transparent pricing
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-base text-slate-500 dark:text-slate-400">
-            Start free on the Explorer plan. No credit card required. Upgrade when
+            Start free on the Explorer plan. No payment card required. Upgrade when
             you're ready.
           </p>
 
