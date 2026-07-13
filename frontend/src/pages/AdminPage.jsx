@@ -2495,6 +2495,17 @@ export default function AdminPage() {
           const totalTokens = filtered.reduce((s, r) => s + (r.total_tokens || 0), 0);
           const totalCost = filtered.reduce((s, r) => s + parseFloat(r.estimated_cost_usd || 0), 0);
 
+          // Credit equivalents — cross-reference credit_stats
+          const creditByFeature = Object.fromEntries(
+            (stats?.credit_stats?.by_feature || []).map((f) => [f.feature_code, f.total_credits])
+          );
+          const creditByUser = Object.fromEntries(
+            (stats?.credit_stats?.top_users || []).map((u) => [u.user_id, u.total_credits])
+          );
+          const featureCreditCost = Object.fromEntries(
+            (stats?.credit_stats?.by_feature || []).map((f) => [f.feature_code, f.total_credits && f.transaction_count ? Math.round(f.total_credits / f.transaction_count) : null])
+          );
+
           const byFeatureMap = {};
           const byModelMap = {};
           const byUserMap = {};
@@ -2567,18 +2578,19 @@ export default function AdminPage() {
               )}
             </div>
 
-            {/* ── Row 2: 5 KPI tiles ── */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {/* ── Row 2: 6 KPI tiles ── */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               {[
-                { label: "Total calls",    value: totalCalls.toLocaleString(),   accent: false },
-                { label: "Input tokens",   value: totalIn.toLocaleString(),       accent: false },
-                { label: "Output tokens",  value: totalOut.toLocaleString(),      accent: false },
-                { label: "Total tokens",   value: totalTokens.toLocaleString(),   accent: false },
-                { label: "Est. cost (USD)",value: `$${totalCost.toFixed(4)}`,     accent: true  },
+                { label: "Total calls",    value: totalCalls.toLocaleString(),   wrap: "border-slate-100 bg-white",   val: "text-slate-900", lbl: "text-slate-500" },
+                { label: "Input tokens",   value: totalIn.toLocaleString(),       wrap: "border-slate-100 bg-white",   val: "text-slate-900", lbl: "text-slate-500" },
+                { label: "Output tokens",  value: totalOut.toLocaleString(),      wrap: "border-slate-100 bg-white",   val: "text-slate-900", lbl: "text-slate-500" },
+                { label: "Total tokens",   value: totalTokens.toLocaleString(),   wrap: "border-slate-100 bg-white",   val: "text-slate-900", lbl: "text-slate-500" },
+                { label: "Est. cost (USD)",value: `$${totalCost.toFixed(4)}`,     wrap: "border-emerald-100 bg-emerald-50", val: "text-emerald-800", lbl: "text-emerald-600" },
+                { label: "Credits used ⚡",value: (stats?.credit_stats?.total_consumed ?? 0).toLocaleString(), wrap: "border-violet-100 bg-violet-50", val: "text-violet-800", lbl: "text-violet-600" },
               ].map((m) => (
-                <div key={m.label} className={`rounded-2xl border px-4 py-4 ${m.accent ? "border-emerald-100 bg-emerald-50" : "border-slate-100 bg-white"}`}>
-                  <div className={`text-2xl font-bold tabular-nums ${m.accent ? "text-emerald-800" : "text-slate-900"}`}>{m.value}</div>
-                  <div className={`mt-1 text-[11px] font-semibold ${m.accent ? "text-emerald-600" : "text-slate-500"}`}>{m.label}</div>
+                <div key={m.label} className={`rounded-2xl border px-4 py-4 ${m.wrap}`}>
+                  <div className={`text-2xl font-bold tabular-nums ${m.val}`}>{m.value}</div>
+                  <div className={`mt-1 text-[11px] font-semibold ${m.lbl}`}>{m.label}</div>
                 </div>
               ))}
             </div>
@@ -2596,7 +2608,8 @@ export default function AdminPage() {
                         <th className="pb-2 pr-4 text-right">In tokens</th>
                         <th className="pb-2 pr-4 text-right">Out tokens</th>
                         <th className="pb-2 pr-4 text-right">Total tokens</th>
-                        <th className="pb-2 text-right">Est. cost (USD)</th>
+                        <th className="pb-2 pr-4 text-right">Est. cost (USD)</th>
+                        <th className="pb-2 text-right text-violet-500">Credits ⚡</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -2607,7 +2620,8 @@ export default function AdminPage() {
                           <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{filtered.filter(r=>(r.feature||"unknown")===row.label).reduce((s,r)=>s+(r.input_tokens||0),0).toLocaleString()}</td>
                           <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{filtered.filter(r=>(r.feature||"unknown")===row.label).reduce((s,r)=>s+(r.output_tokens||0),0).toLocaleString()}</td>
                           <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{row.tokens.toLocaleString()}</td>
-                          <td className="py-1.5 text-right tabular-nums font-semibold text-slate-800">${row.cost.toFixed(4)}</td>
+                          <td className="py-1.5 pr-4 text-right tabular-nums font-semibold text-slate-800">${row.cost.toFixed(4)}</td>
+                          <td className="py-1.5 text-right tabular-nums font-semibold text-violet-700">{creditByFeature[row.label] != null ? creditByFeature[row.label].toLocaleString() : "—"}</td>
                         </tr>
                       ))}
                       <tr className="border-t-2 border-slate-200 font-semibold text-[12px]">
@@ -2616,7 +2630,8 @@ export default function AdminPage() {
                         <td className="pt-2 pr-4 text-right tabular-nums text-slate-700">{totalIn.toLocaleString()}</td>
                         <td className="pt-2 pr-4 text-right tabular-nums text-slate-700">{totalOut.toLocaleString()}</td>
                         <td className="pt-2 pr-4 text-right tabular-nums text-slate-700">{totalTokens.toLocaleString()}</td>
-                        <td className="pt-2 text-right tabular-nums text-emerald-700">${totalCost.toFixed(4)}</td>
+                        <td className="pt-2 pr-4 text-right tabular-nums text-emerald-700">${totalCost.toFixed(4)}</td>
+                        <td className="pt-2 text-right tabular-nums text-violet-700">{(stats?.credit_stats?.total_consumed ?? 0).toLocaleString()}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -2654,10 +2669,11 @@ export default function AdminPage() {
                   <div className="divide-y divide-slate-50">
                     <div className="flex items-center justify-between pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                       <span>User</span>
-                      <span className="flex gap-5 pr-1"><span>Calls</span><span>Tokens</span><span>Cost</span><span className="w-6"></span></span>
+                      <span className="flex gap-5 pr-1"><span>Calls</span><span>Tokens</span><span>Cost</span><span className="w-14 text-right text-violet-500">Credits ⚡</span><span className="w-6"></span></span>
                     </div>
                     {byUser.map((row) => {
                       const userEvents = filtered.filter((r) => (r.user_email || r.user_id) === row.email);
+                      const userCredits = creditByUser[row.email];
                       return (
                         <div key={row.email} className="flex items-center justify-between gap-2 py-1.5 text-[12px]">
                           <span className="truncate font-mono text-[11px] text-slate-700">{row.email}</span>
@@ -2665,6 +2681,7 @@ export default function AdminPage() {
                             <span className="w-8 text-right">{row.calls}</span>
                             <span className="w-16 text-right">{row.tokens.toLocaleString()}</span>
                             <span className="w-16 text-right font-semibold text-slate-700">${row.cost.toFixed(4)}</span>
+                            <span className="w-14 text-right font-semibold text-violet-700">{userCredits != null ? userCredits.toLocaleString() : "—"}</span>
                             <button
                               type="button"
                               title={`Export report for ${row.email}`}
@@ -2689,7 +2706,7 @@ export default function AdminPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => downloadCSV(filtered, [
+                  onClick={() => downloadCSV(filtered.map((r) => ({ ...r, credits_used: featureCreditCost[r.feature] ?? "" })), [
                     { key: "created_at", label: "Time" },
                     { key: "user_email", label: "User" },
                     { key: "feature", label: "Feature" },
@@ -2699,6 +2716,7 @@ export default function AdminPage() {
                     { key: "output_tokens", label: "Output Tokens" },
                     { key: "total_tokens", label: "Total Tokens" },
                     { key: "estimated_cost_usd", label: "Cost (USD)" },
+                    { key: "credits_used", label: "Credits Used" },
                   ], "ai-usage.csv")}
                   className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[12px] font-medium text-slate-600 transition hover:bg-slate-50"
                 >
@@ -2719,11 +2737,14 @@ export default function AdminPage() {
                                 <th className="pb-2 pr-3">Provider</th>
                                 <th className="pb-2 pr-3 text-right">In</th>
                                 <th className="pb-2 pr-3 text-right">Out</th>
-                                <th className="pb-2 text-right">Cost</th>
+                                <th className="pb-2 pr-3 text-right">Cost</th>
+                                <th className="pb-2 text-right text-violet-500">Credits ⚡</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50">
-                              {pagedRecent.map((row) => (
+                              {pagedRecent.map((row) => {
+                                const perCallCredits = featureCreditCost[row.feature];
+                                return (
                                 <tr key={row.id}>
                                   <td className="py-1.5 pr-3 whitespace-nowrap text-slate-400">{formatDateTime(row.created_at)}</td>
                                   <td className="py-1.5 pr-3 max-w-[160px] truncate font-mono text-slate-600">{row.user_email || row.user_id || "—"}</td>
@@ -2731,9 +2752,11 @@ export default function AdminPage() {
                                   <td className="py-1.5 pr-3 text-slate-500">{row.provider} / {row.model}</td>
                                   <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500">{(row.input_tokens || 0).toLocaleString()}</td>
                                   <td className="py-1.5 pr-3 text-right tabular-nums text-slate-500">{(row.output_tokens || 0).toLocaleString()}</td>
-                                  <td className="py-1.5 text-right tabular-nums font-semibold text-slate-700">${Number(row.estimated_cost_usd || 0).toFixed(5)}</td>
+                                  <td className="py-1.5 pr-3 text-right tabular-nums font-semibold text-slate-700">${Number(row.estimated_cost_usd || 0).toFixed(5)}</td>
+                                  <td className="py-1.5 text-right tabular-nums text-violet-600">{perCallCredits != null ? perCallCredits : "—"}</td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
