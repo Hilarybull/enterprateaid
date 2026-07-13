@@ -2449,14 +2449,28 @@ export default function AdminPage() {
           const totalCost = filtered.reduce((s, r) => s + parseFloat(r.estimated_cost_usd || 0), 0);
 
           // Credit equivalents — cross-reference credit_stats
+          // by_feature uses short codes (e.g. "suggest_field"); ai_usage uses dotted names (e.g. "validation.suggest_field")
+          // fuzzyCredit: find credit cost by checking if any credit feature code appears as a segment in the ai feature name
+          const featureCosts = stats?.credit_stats?.feature_costs || {};
+          function fuzzyCredit(aiFeature) {
+            if (featureCosts[aiFeature] != null) return featureCosts[aiFeature];
+            const parts = aiFeature ? aiFeature.split(".") : [];
+            // check each prefix (longest first)
+            for (let i = parts.length; i >= 1; i--) {
+              const candidate = parts.slice(0, i).join(".");
+              if (featureCosts[candidate] != null) return featureCosts[candidate];
+            }
+            // check last segment
+            const last = parts[parts.length - 1];
+            if (last && featureCosts[last] != null) return featureCosts[last];
+            return null;
+          }
+
           const creditByFeature = Object.fromEntries(
-            (stats?.credit_stats?.by_feature || []).map((f) => [f.feature_code, f.total_credits])
+            (stats?.credit_stats?.by_feature || []).map((f) => [f.feature_code, f.credits])
           );
           const creditByUser = Object.fromEntries(
-            (stats?.credit_stats?.top_users || []).map((u) => [u.user_id, u.total_credits])
-          );
-          const featureCreditCost = Object.fromEntries(
-            (stats?.credit_stats?.by_feature || []).map((f) => [f.feature_code, f.total_credits && f.transaction_count ? Math.round(f.total_credits / f.transaction_count) : null])
+            (stats?.credit_stats?.top_users || []).map((u) => [u.user_id, u.credits])
           );
 
           const byFeatureMap = {};
@@ -2574,7 +2588,7 @@ export default function AdminPage() {
                           <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{filtered.filter(r=>(r.feature||"unknown")===row.label).reduce((s,r)=>s+(r.output_tokens||0),0).toLocaleString()}</td>
                           <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{row.tokens.toLocaleString()}</td>
                           <td className="py-1.5 pr-4 text-right tabular-nums font-semibold text-slate-800">${row.cost.toFixed(4)}</td>
-                          <td className="py-1.5 text-right tabular-nums font-semibold text-violet-700">{creditByFeature[row.label] != null ? creditByFeature[row.label].toLocaleString() : "—"}</td>
+                          <td className="py-1.5 text-right tabular-nums font-semibold text-violet-700">{(() => { const v = creditByFeature[row.label]; const cost = fuzzyCredit(row.label); return v != null ? v.toLocaleString() : cost != null ? `${cost}⚡/call` : "—"; })()}</td>
                         </tr>
                       ))}
                       <tr className="border-t-2 border-slate-200 font-semibold text-[12px]">
@@ -2696,7 +2710,7 @@ export default function AdminPage() {
                             </thead>
                             <tbody className="divide-y divide-slate-50">
                               {pagedRecent.map((row) => {
-                                const perCallCredits = featureCreditCost[row.feature];
+                                const perCallCredits = fuzzyCredit(row.feature);
                                 return (
                                 <tr key={row.id}>
                                   <td className="py-1.5 pr-3 whitespace-nowrap text-slate-400">{formatDateTime(row.created_at)}</td>

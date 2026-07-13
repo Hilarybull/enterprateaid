@@ -153,6 +153,15 @@ async def _select_credit_stats(user_email_map: dict[str, str]) -> dict:
     except Exception:
         txns = []
 
+    try:
+        feature_configs = await sb_select(
+            "credit_feature_config",
+            columns="feature_code,credit_cost",
+        )
+    except Exception:
+        feature_configs = []
+    feature_costs = {fc["feature_code"]: fc["credit_cost"] for fc in feature_configs}
+
     total_issued = sum(int(w.get("lifetime_credits_issued") or 0) for w in wallets)
     total_consumed = sum(int(w.get("lifetime_credits_used") or 0) for w in wallets)
     total_available = sum(int(w.get("available_credits") or 0) for w in wallets)
@@ -194,6 +203,7 @@ async def _select_credit_stats(user_email_map: dict[str, str]) -> dict:
         "by_feature": sorted(by_feature.values(), key=lambda x: x["credits"], reverse=True),
         "top_users": sorted(by_user.values(), key=lambda x: x["credits"], reverse=True)[:10],
         "wallets": wallet_rows[:50],
+        "feature_costs": feature_costs,
     }
 
 
