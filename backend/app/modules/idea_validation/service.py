@@ -307,19 +307,6 @@ async def evaluate(
     is_free_plan = plan_key in _FREE_PLAN_KEYS or plan_status in {"trial", "expired"}
     use_serp = plan_uses_serp(plan_key, plan_status)
 
-    if is_free_plan:
-        # Count lifetime validations for this user
-        existing_validations = await sb_select(
-            "idea_validation_results",
-            filters=[("user_id", "eq", user_id)],
-        )
-        count = len(existing_validations) if existing_validations else 0
-        if count >= _LIFETIME_VALIDATION_LIMIT:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You have used your free lifetime validation. Upgrade to run more validations.",
-            )
-
     # Always prefer the user's current input payloads when provided.
     iv_payload = None
     if idea_validation:

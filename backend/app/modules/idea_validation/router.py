@@ -89,12 +89,13 @@ async def evaluate_validation(
     payload: EvaluateRequest,
     user=Depends(get_current_user),
 ) -> ValidationResult:
-    result = await evaluate(
-        user_id=user["id"],
-        workspace_id=payload.workspace_id,
-        inputs=payload.inputs,
-        idea_validation=payload.idea_validation,
-    )
+    async with credit_guard(user["id"], "idea_validation"):
+        result = await evaluate(
+            user_id=user["id"],
+            workspace_id=payload.workspace_id,
+            inputs=payload.inputs,
+            idea_validation=payload.idea_validation,
+        )
     return ValidationResult(**result)
 
 
