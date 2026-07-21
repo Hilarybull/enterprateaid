@@ -249,7 +249,7 @@ export default function LandingPage() {
             ))}
           </ul>
           <div className="flex items-center gap-2">
-            <Link to="/login" className="hidden text-sm font-medium text-slate-600 hover:text-slate-900 sm:block">Sign in</Link>
+            <Link to="/login" className="text-sm font-medium text-slate-600 hover:text-slate-900">Sign in</Link>
             <button
               type="button"
               onClick={() => navigate("/login")}
@@ -292,22 +292,20 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
           <div className="grid gap-10 lg:grid-cols-2 lg:gap-16 lg:items-center">
             <div>
-              <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl xl:text-5xl">
+              <h1 className="text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl xl:text-5xl drop-shadow-md">
                 Input data once. Generate everywhere.{" "}
-                <span className="bg-gradient-to-r from-brand-400 to-accent-400 bg-clip-text text-transparent">
-                  Simulate before acting. Grow with intelligence.
-                </span>
+                <span className="text-white">Simulate before acting. Grow with intelligence.</span>
               </h1>
 
               <p className="mt-5 text-lg font-semibold leading-relaxed text-white">
                 The intelligent business workspace for small businesses that want to move faster.
               </p>
 
-              <p className="mt-3 text-base leading-relaxed text-indigo-100">
+              <p className="mt-3 text-base leading-relaxed text-white/90">
                 EnterprateAI helps small businesses save time, reduce cost, discover risks, uncover opportunities, and move from idea to market faster.
               </p>
 
-              <p className="mt-3 text-sm leading-relaxed text-indigo-200">
+              <p className="mt-3 text-sm leading-relaxed text-white/70">
                 Turn one set of business data into business plans, proposals, invoices, quotations, marketplace listings, simulations, risk insights, and growth opportunities - all from one connected workspace.
               </p>
 
@@ -334,46 +332,15 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* Preview card — hidden on mobile to keep hero tight */}
-            <div className="relative hidden lg:block">
-              <div className="overflow-hidden rounded-2xl border border-white/10 bg-white shadow-2xl shadow-black/40">
-                <div className="flex items-center gap-1.5 border-b border-slate-100 bg-slate-50 px-4 py-3">
-                  <span className="h-3 w-3 rounded-full bg-rose-400" />
-                  <span className="h-3 w-3 rounded-full bg-amber-400" />
-                  <span className="h-3 w-3 rounded-full bg-emerald-400" />
-                  <span className="ml-3 text-xs font-medium text-slate-500">Decision Simulation: Hiring Analysis</span>
-                </div>
-                <div className="space-y-3 p-5">
-                  {[
-                    { label: "Revenue Impact", value: "+£8,400/mo", tag: "↑ 18% by Month 6", tagColor: "text-emerald-600", bg: "bg-emerald-50" },
-                    { label: "Cash Runway", value: "8 → 5 months", tag: "↓ Consider contractor first", tagColor: "text-amber-600", bg: "bg-amber-50" },
-                    { label: "Break even shift", value: "+2 months", tag: "→ Safe threshold: hire in Month 3", tagColor: "text-brand-600", bg: "bg-brand-50" },
-                  ].map((m) => (
-                    <div key={m.label} className={`rounded-xl p-3 ${m.bg}`}>
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{m.label}</span>
-                        <span className="text-sm font-bold text-slate-900">{m.value}</span>
-                      </div>
-                      <p className={`mt-1 text-xs font-medium ${m.tagColor}`}>{m.tag}</p>
-                    </div>
-                  ))}
-                  <div className="rounded-xl border border-brand-100 bg-brand-50 p-3">
-                    <p className="text-xs font-semibold text-brand-700">AI Recommendation</p>
-                    <p className="mt-1 text-xs text-slate-600">Delay full-time hire by 2 months or use contractor to preserve cashflow. Safe to hire from Month 3 under all revenue scenarios.</p>
-                  </div>
-                  <svg viewBox="0 0 280 60" className="w-full" aria-hidden="true">
-                    <polyline points="0,55 47,45 93,32 140,22 187,14 233,9 280,5" fill="none" stroke="#6366f1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                    <polyline points="0,55 47,53 93,50 140,48 187,46 233,44 280,42" fill="none" stroke="#f43f8f" strokeWidth="2" strokeDasharray="4,3" strokeLinecap="round" strokeLinejoin="round" opacity="0.5" />
-                    <line x1="0" y1="38" x2="280" y2="38" stroke="#e2e8f0" strokeWidth="1" />
-                  </svg>
-                  <div className="flex gap-4 text-[11px] text-slate-400">
-                    <span><span className="font-bold text-brand-500">—</span> With hire</span>
-                    <span><span className="font-bold text-accent-500">- -</span> Without hire</span>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3 py-2 shadow-sm text-xs font-semibold text-emerald-700">
-                ✓ Decision made with confidence
+            {/* Hero image — visible on all screen sizes and responsive */}
+            <div className="relative block">
+              <div className="overflow-hidden rounded-3xl max-w-full sm:max-w-2xl md:max-w-xl mx-auto lg:mx-0">
+                <img
+                  src="/hero-section-a.png"
+                  alt="Hero Section A"
+                  className="block w-full h-56 sm:h-72 md:h-[440px] lg:h-auto object-contain rounded-2xl"
+                  style={{ background: 'transparent' }}
+                />
               </div>
             </div>
           </div>
