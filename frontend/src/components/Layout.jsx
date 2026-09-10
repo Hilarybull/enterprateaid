@@ -8,6 +8,7 @@ import BusinessAssistant from "./BusinessAssistant";
 import InviteModal from "./InviteModal";
 import OnboardingModal, { hasSeenOnboarding } from "./OnboardingModal";
 import WorkspacePrompt from "./WorkspacePrompt";
+import { ToastContainer } from "./Toast";
 import { WorkspaceProfilePanel } from "./WorkspaceProfileCard";
 import { getAcceptedServiceValidationEntry } from "../lib/acceptedValidation";
 import { hasModuleAccess, isPlatformModuleGranted, isPlatformModuleRestricted } from "../lib/permissions";
@@ -23,8 +24,8 @@ const NAV = [
   { to: "/simulation", label: "Simulation", subtitle: "Run what-if scenarios", icon: "beaker", moduleKey: "simulation", public: true },
   { to: "/registration", label: "Business Registration", subtitle: "Legal & compliance", icon: "doc", moduleKey: "registration" },
   { to: "/blueprint", label: "Business Blueprints", subtitle: "Plans & documents", icon: "book", moduleKey: "blueprint" },
-  { to: "/catalogue", label: "Catalogue", subtitle: "Products & offers", icon: "box", moduleKey: "catalogue" },
-  { to: "/financials", label: "Financials", subtitle: "Invoicing & tracking", icon: "cash", moduleKey: "financials" },
+  { to: "/catalogue", label: "Catalogue", subtitle: "Products, customers & vendors", icon: "box", moduleKey: "catalogue" },
+  { to: "/financials", label: "Financials", subtitle: "Invoices, receipts, contracts, expenses & quotations", icon: "cash", moduleKey: "financials" },
   { to: "/integrations", label: "Integrations", subtitle: "Import from external services", icon: "plug", moduleKey: "integrations" },
   { to: "/marketplace", label: "Marketplace", subtitle: "Discover businesses", icon: "store", moduleKey: null, public: true },
   { to: "/referrals", label: "Referrals", subtitle: "Earn 5% per referral", icon: "share", moduleKey: null, public: true },
@@ -219,6 +220,7 @@ function SidebarLink({ item, onClick, forceInactive, locked, tourActive }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold text-slate-500 dark:text-slate-500">{item.label}</div>
+          {item.subtitle && <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{item.subtitle}</div>}
         </div>
         <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">Soon</span>
       </div>
@@ -237,6 +239,7 @@ function SidebarLink({ item, onClick, forceInactive, locked, tourActive }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold text-slate-500 dark:text-slate-500">{item.label}</div>
+          {item.subtitle && <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{item.subtitle}</div>}
         </div>
         <div className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-600 dark:bg-brand-900/20 dark:text-brand-400">
           Upgrade
@@ -269,6 +272,7 @@ function SidebarLink({ item, onClick, forceInactive, locked, tourActive }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-semibold">{item.label}</div>
+        {item.subtitle && <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight mt-0.5">{item.subtitle}</div>}
       </div>
     </NavLink>
   );
@@ -295,7 +299,9 @@ export default function Layout() {
   const workspaceSwitcherRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [notifToasts, setNotifToasts] = useState([]);
   const dismissedNotifIds = useRef(new Set(JSON.parse(localStorage.getItem("ea_notif_dismissed") || "[]")));
+  const seenNotifIds = useRef(new Set(JSON.parse(localStorage.getItem("ea_notif_seen") || "[]")));
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [helpName, setHelpName] = useState("");
@@ -597,11 +603,46 @@ export default function Layout() {
               .map((i) => ({ ...i, _notifType: "overdue" }))
           : [];
         const dismissed = dismissedNotifIds.current;
-        setNotifications(
-          [...overdueInvoices, ...pendingRfqs].filter(
-            (n) => !dismissed.has(`${n._notifType}-${n.id}`)
-          )
+        let proposalNotifs = [];
+        try {
+          const inbox = await apiRequest("/proposals/inbox", "GET");
+          proposalNotifs = (inbox?.items || [])
+            .filter((p) => p.status === "SUBMITTED" && !p.viewed_at)
+            .map((p) => ({ ...p, _notifType: "proposal" }));
+        } catch { /* proposals optional — never block the app shell */ }
+        let clarifyNotifs = [];
+        try {
+          const act = await apiRequest("/proposals/activity", "GET");
+          clarifyNotifs = (act?.items || [])
+            .filter((p) => p.status === "CLARIFICATION_REQUESTED")
+            .map((p) => ({ ...p, _notifType: "clarification" }));
+        } catch { /* optional */ }
+        const nextNotifs = [...overdueInvoices, ...pendingRfqs, ...proposalNotifs, ...clarifyNotifs].filter(
+          (n) => !dismissed.has(`${n._notifType}-${n.id}`)
         );
+        setNotifications(nextNotifs);
+        // Pop a toast for proposal / clarification items not seen before.
+        if (!cancelled) {
+          const fresh = nextNotifs.filter(
+            (n) => (n._notifType === "proposal" || n._notifType === "clarification") &&
+              !seenNotifIds.current.has(`${n._notifType}-${n.id}`)
+          );
+          if (fresh.length) {
+            setNotifToasts((t) => [
+              ...t,
+              ...fresh.map((n) => ({
+                id: `${n._notifType}-${n.id}`,
+                kind: "info",
+                title: n._notifType === "clarification" ? "Clarification requested" : "New proposal",
+                message: n._notifType === "clarification"
+                  ? `${n.recipient_name || "A business"} asked for clarification${n.request_title ? ` on “${n.request_title}”` : ""}.`
+                  : `${n.proposer_name || "A business"} sent you a proposal${n.request_title ? ` for “${n.request_title}”` : ""}.`,
+              })),
+            ]);
+            fresh.forEach((n) => seenNotifIds.current.add(`${n._notifType}-${n.id}`));
+            localStorage.setItem("ea_notif_seen", JSON.stringify([...seenNotifIds.current]));
+          }
+        }
         const status = ws?.data?.decision?.status;
         if (status === "accepted" || status === "rejected") setDecisionStatus(status);
         else setDecisionStatus(null);
@@ -724,7 +765,7 @@ export default function Layout() {
     new URLSearchParams(location.search).get("from") === "module";
 
   const Sidebar = (
-    <aside className="flex h-full min-h-0 w-[260px] flex-col overflow-hidden border-r border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-slate-950 lg:w-[280px] lg:px-5">
+    <aside className="flex h-full min-h-0 w-[260px] flex-col overflow-y-auto border-r border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-slate-950 lg:w-[280px] lg:px-5">
       <div className="mx-1 flex items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -1248,7 +1289,9 @@ export default function Layout() {
                         notifications.map((notif) => {
                           const destination = notif._notifType === "overdue"
                             ? `/financials?tab=invoices`
-                            : `/financials?tab=quotations`;
+                            : (notif._notifType === "proposal" || notif._notifType === "clarification")
+                              ? `/financials?tab=proposals`
+                              : `/financials?tab=quotations`;
                           return (
                             <button
                               key={`${notif._notifType}-${notif.id}`}
@@ -1277,6 +1320,30 @@ export default function Layout() {
                                       {notif.currency || ""}{Number(notif.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                   )}
+                                </>
+                              ) : notif._notifType === "proposal" ? (
+                                <>
+                                  <div className="flex w-full items-center justify-between gap-2">
+                                    <span className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">{notif.proposer_name || "A business"}</span>
+                                    <span className="shrink-0 rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-600 dark:bg-brand-900/30 dark:text-brand-400">Proposal</span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    New proposal{notif.request_title ? ` for “${notif.request_title}”` : ""}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">{notif.submitted_at ? new Date(notif.submitted_at).toLocaleDateString() : ""}</span>
+                                </>
+                              ) : notif._notifType === "clarification" ? (
+                                <>
+                                  <div className="flex w-full items-center justify-between gap-2">
+                                    <span className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">{notif.recipient_name || "A business"}</span>
+                                    <span className="shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">Clarification</span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    Clarification requested{notif.request_title ? ` on “${notif.request_title}”` : ""}
+                                  </span>
+                                  {notif.clarification_note ? (
+                                    <span className="line-clamp-2 text-[10px] text-slate-400">{notif.clarification_note}</span>
+                                  ) : null}
                                 </>
                               ) : (
                                 <>
@@ -1484,6 +1551,7 @@ export default function Layout() {
       {onboardingOpen && !workspaceId && !demoTour?.active && (
         <OnboardingModal onDismiss={() => setOnboardingOpen(false)} userId={email} />
       )}
+      <ToastContainer toasts={notifToasts} onClose={(id) => setNotifToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   );
 }

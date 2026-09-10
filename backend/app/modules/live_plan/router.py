@@ -126,15 +126,14 @@ async def confirm_adopt_live_plan(
     user=Depends(get_current_user),
 ) -> dict:
     """Write pre-extracted data to DB after the user reviews and confirms the preview."""
-    async with credit_guard(user["id"], "live_plan_import_extract", payload.idempotency_key):
-        result = await confirm_adopt_plan(
-            user_id=user["id"],
-            business_id=business_id,
-            extracted=payload.extracted,
-            markdown=payload.markdown,
-            doc_title=payload.source_title,
-            document_id=payload.document_id,
-        )
+    result = await confirm_adopt_plan(
+        user_id=user["id"],
+        business_id=business_id,
+        extracted=payload.extracted,
+        markdown=payload.markdown,
+        doc_title=payload.source_title,
+        document_id=payload.document_id,
+    )
     return {"business_id": business_id, **result}
 
 

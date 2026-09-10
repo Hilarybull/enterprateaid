@@ -87,6 +87,21 @@ def _extract_section_headings(markdown: str | None) -> list[tuple[str, str]]:
     return unique
 
 
+def _clean_text_field(value: Any) -> str | None:
+    """Strip markdown formatting artifacts from AI-extracted text fields."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    # Remove markdown bold/italic markers
+    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,2}(.*?)_{1,2}", r"\1", text)
+    # Remove leading bullet/dash/em-dash markers
+    text = re.sub(r"^[\-\–\—\•\*]\s+", "", text)
+    # Remove trailing punctuation artifacts
+    text = text.strip(" \t\n\r.,;:")
+    return text if text else None
+
+
 def _extract_first_number(markdown: str | None, keywords: Iterable[str]) -> float | None:
     text = str(markdown or "").lower()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -1202,49 +1217,77 @@ async def _extract_structured_data(
     extracted: dict[str, Any] = {}
     try:
         llm = await pick_llm_for_user(user_id)
+        # Sample beginning + end of document so financial data in later sections is not cut off
+        doc_head = markdown[:6000]
+        doc_tail = markdown[-3000:] if len(markdown) > 6000 else ""
+        doc_sample = doc_head + ("\n\n[...]\n\n" + doc_tail if doc_tail else "")
+
         extraction_prompt = f"""You are extracting structured data from a business plan document. Return ONLY a single valid JSON object — no markdown fences, no explanation, no extra text.
 
 Fill in every field you can find. Never leave a field as null if the information is present anywhere in the document.
 
 JSON structure to return:
 {{
-  "business_name": "the company or trading name",
+  "business_name": "the company or trading name (e.g. 'Rateg', 'Acme Ltd')",
   "industry": "the sector or industry (e.g. SaaS, Retail, Consulting, Subscription services)",
   "target_market": "who the customers are — be specific (e.g. freelancers and remote workers in Belgium)",
   "products_services": [
-    {{"name": "exact product or service name", "description": "what it does in one sentence", "price": "price if stated, e.g. £49/month, or null"}}
+    {{
+      "name": "the brand or product name (e.g. 'Rateg', 'Rateg Workspace', 'Pro Plan') — NOT a pricing description like 'Monthly Subscription'",
+      "description": "what it does in one sentence",
+      "unit_price": <selling price per unit as a plain number, e.g. 49 for £49/month — null if not stated>,
+      "price_label": "human-readable price label, e.g. '£49/month' or 'from £200/day' — null if not stated"
+    }}
   ],
   "pricing_model": "how customers are charged (e.g. flat monthly subscription, per-seat SaaS, one-off fee)",
-  "monthly_revenue_target": <the revenue/sales figure as a plain number — NOT costs>,
-  "monthly_costs": <total monthly costs/expenses as a plain number>,
-  "gross_margin_pct": <contribution or gross margin as a PERCENTAGE between 0 and 100, e.g. 72.8 — NEVER a pound or dollar amount>,
-  "cash_runway_months": <number of months runway, or null>,
-  "active_customers_target": <target number of customers, or null>,
+  "monthly_revenue_target": <TOTAL expected monthly revenue as a plain number — this is revenue across ALL customers, NOT a per-unit price>,
+  "monthly_costs": <total monthly costs/expenses as a plain number — NOT revenue>,
+  "gross_margin_pct": <contribution or gross margin as a PERCENTAGE between 0 and 100, e.g. 72.8 — NEVER a currency amount>,
+  "cash_runway_months": <number of months cash runway, or null>,
+  "active_customers_target": <target number of customers or subscribers at steady state, or null>,
   "unique_value_proposition": "one clear sentence on what makes this business different",
-  "key_assumptions": ["assumption 1", "assumption 2"],
-  "main_risks": ["risk 1", "risk 2"]
+  "description": "two or three sentences describing what the business does and who it serves",
+  "location": "the country, region, or city where the business operates (e.g. 'Belgium', 'London', 'UK — National')",
+  "key_assumptions": ["assumption 1", "assumption 2", "assumption 3"],
+  "main_risks": ["risk 1", "risk 2", "risk 3"]
 }}
 
 CRITICAL RULES:
 - gross_margin_pct is always a percentage (0–100). If the document says "contribution margin 72.8%", use 72.8. Never use a currency figure here.
-- monthly_revenue_target = revenue/sales only. monthly_costs = costs/expenses only. They are separate fields.
-- products_services: list every product or service mentioned. Do not return an empty array if any product is described.
-- If the business name appears in a heading like "Business Plan for Rateg", extract "Rateg" as the business_name.
+- monthly_revenue_target = TOTAL monthly revenue across all customers/subscribers — NOT the per-unit product price.
+  Example: if the plan targets 30 subscribers at £49/month, monthly_revenue_target = 1470, NOT 49.
+- monthly_costs = total monthly operating costs — separate from revenue.
+- products_services.unit_price = the per-unit selling price (e.g. 49 for a £49/month subscription). Never the total revenue.
+- Do not return an empty products_services array if any product or service is described anywhere in the document.
+- products_services[].name must be the brand, product, or service name (e.g. "Rateg", "Rateg Workspace", "Agency Retainer") — NEVER a pricing or subscription type like "Monthly Subscription", "Flat Fee Plan", or "Workspace Subscription". The pricing description belongs in pricing_model, not in name. If the only identifiable name is the company name, use the company name.
+- If the business name appears in a heading like "Business Plan for Rateg", extract "Rateg" as business_name.
+- location: country/region where the business operates — e.g. "Belgium", "UK — National", "London, UK".
+- key_assumptions and main_risks: extract 3–5 items each from the document. Do not invent items not mentioned.
 
 Business plan document:
-{markdown[:8000]}"""
+{doc_sample}"""
 
-        response = await llm.chat_completions_create(
-            messages=[{"role": "user", "content": extraction_prompt}],
-            model=None,
-            temperature=0.1,
-            max_tokens=2000,
+        result = await llm.generate_text(
+            system="You are a structured data extraction assistant. Return only valid JSON.",
+            prompt=extraction_prompt,
+            feature="live_plan_import_extract",
         )
-        raw = (response.choices[0].message.content or "").strip()
+        raw = (result.text or "").strip()
         if raw.startswith("```"):
             raw = "\n".join(raw.split("\n")[1:])
             raw = raw.rsplit("```", 1)[0].strip()
         extracted = json.loads(raw)
+        # Strip markdown only from short identifier fields — description/UVP/lists keep their formatting
+        for _field in ("business_name", "industry", "target_market", "pricing_model", "location"):
+            if extracted.get(_field):
+                extracted[_field] = _clean_text_field(extracted[_field])
+        # Clean product name/price_label (short fields); keep description formatted
+        for _p in (extracted.get("products_services") or []):
+            if isinstance(_p, dict):
+                if _p.get("name"):
+                    _p["name"] = _clean_text_field(_p["name"])
+                if _p.get("price_label"):
+                    _p["price_label"] = _clean_text_field(_p["price_label"])
     except Exception:
         logger.exception("AI extraction failed for business %s — falling back to regex", doc_meta.get("id", "unknown"))
         extracted = {
@@ -1284,6 +1327,78 @@ Business plan document:
             )
 
     return extracted
+
+
+def _parse_price_to_float(price_str: Any) -> float:
+    """Convert a price string like '£49/month' or '49.00' to a float."""
+    if price_str is None:
+        return 0.0
+    if isinstance(price_str, (int, float)):
+        return float(price_str)
+    cleaned = re.sub(r"[^\d.]", "", str(price_str).split("/")[0].split("per")[0])
+    try:
+        return float(cleaned) if cleaned else 0.0
+    except ValueError:
+        return 0.0
+
+
+async def _seed_catalogue_products(*, user_id: str, business_id: str, products: list[dict], now: str) -> None:
+    """Merge extracted products into workspace catalogue without overwriting existing entries."""
+    try:
+        ws = await _safe_select(
+            "workspaces",
+            filters=[("id", "eq", business_id), ("user_id", "eq", user_id)],
+            single=True,
+        )
+        if not ws:
+            return
+        ws_id = ws.get("id")
+        data = dict(ws.get("data") or {})
+        catalogue = dict(data.get("catalogue") or {})
+        existing_products: list[dict] = list(catalogue.get("products") or [])
+
+        # Replace all previous live-plan-imported entries so stale names don't linger
+        user_products = [p for p in existing_products if p.get("source_system") != "live_plan_import"]
+
+        _PRICING_WORDS = {"subscription", "flat", "monthly", "annual", "yearly", "fee", "plan", "tier", "package", "pricing"}
+
+        def _is_pricing_description(name: str) -> bool:
+            words = {w.lower() for w in name.split()}
+            return words and words.issubset(_PRICING_WORDS)
+
+        new_entries: list[dict] = []
+        for item in products:
+            name = str(item.get("name") or "").strip()
+            if not name or _is_pricing_description(name):
+                continue
+            # Prefer numeric unit_price (new field), fall back to legacy price string
+            price_raw = item.get("unit_price") if item.get("unit_price") is not None else item.get("price")
+            base_price = _parse_price_to_float(price_raw)
+            new_entries.append({
+                "id": str(uuid4()),
+                "name": name,
+                "type": "service",
+                "product_type": "service",
+                "category": "Live Plan Import",
+                "base_price": base_price,
+                "original_price": base_price,
+                "cost_of_sales": 0.0,
+                "discount": 0.0,
+                "freight_cost": 0.0,
+                "description": str(item.get("description") or ""),
+                "archived": False,
+                "source_system": "live_plan_import",
+                "created_at": now,
+                "updated_at": now,
+            })
+
+        existing_products = user_products + new_entries
+
+        catalogue["products"] = existing_products
+        data["catalogue"] = catalogue
+        await _safe_update("workspaces", payload={"data": data, "updated_at": now}, filters=[("id", "eq", ws_id)])
+    except Exception:
+        logger.exception("_seed_catalogue_products failed — skipping catalogue update")
 
 
 async def _write_extracted_to_plan(
@@ -1343,13 +1458,21 @@ async def _write_extracted_to_plan(
         _upsert_assumption("target_market", "Target market", extracted.get("target_market"), "MARKET"),
         _upsert_assumption("pricing_model", "Pricing model", extracted.get("pricing_model"), "COMMERCIAL"),
         _upsert_assumption("unique_value_proposition", "Value proposition", extracted.get("unique_value_proposition"), "STRATEGIC"),
+        _upsert_assumption("description", "Business description", extracted.get("description"), "STRATEGIC"),
+        _upsert_assumption("location", "Location / Geography", extracted.get("location"), "MARKET"),
         _upsert_assumption("monthly_revenue_target", "Monthly revenue target", extracted.get("monthly_revenue_target"), "FINANCIAL"),
         _upsert_assumption("monthly_costs", "Monthly costs", extracted.get("monthly_costs"), "FINANCIAL"),
         _upsert_assumption("gross_margin_pct", "Gross margin %", extracted.get("gross_margin_pct"), "FINANCIAL"),
         _upsert_assumption("cash_runway_months", "Cash runway (months)", extracted.get("cash_runway_months"), "FINANCIAL"),
         _upsert_assumption("active_customers_target", "Active customers target", extracted.get("active_customers_target"), "CUSTOMER"),
         *([_upsert_assumption("products_services", "Products / services", products, "COMMERCIAL")] if isinstance(products, list) and products else []),
+        *([_upsert_assumption("key_assumptions", "Key assumptions", extracted.get("key_assumptions"), "STRATEGIC")] if extracted.get("key_assumptions") else []),
+        *([_upsert_assumption("main_risks", "Main risks", extracted.get("main_risks"), "STRATEGIC")] if extracted.get("main_risks") else []),
     )
+
+    # Seed extracted products into workspace catalogue
+    if isinstance(products, list) and products:
+        await _seed_catalogue_products(user_id=user_id, business_id=business_id, products=products, now=now)
 
     await _safe_update(
         "live_business_plans",

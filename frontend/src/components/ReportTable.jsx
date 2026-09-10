@@ -7,9 +7,11 @@ export function StatusBadge({ status }) {
       ? "bg-emerald-50 text-emerald-700"
       : s === "overdue" || s === "rejected"
         ? "bg-rose-50 text-rose-700"
-        : s === "pending" || s === "sent"
-          ? "bg-amber-50 text-amber-700"
-          : "bg-slate-100 text-slate-600";
+        : s === "partially paid" || s === "partial"
+          ? "bg-violet-50 text-violet-700"
+          : s === "pending" || s === "sent"
+            ? "bg-amber-50 text-amber-700"
+            : "bg-slate-100 text-slate-600";
   return (
     <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
       {status || "—"}

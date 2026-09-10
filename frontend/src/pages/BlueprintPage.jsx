@@ -14,6 +14,7 @@ import { BlueprintIllustration, IllustrationCard } from "../components/Illustrat
 import SegmentedTabs from "../components/SegmentedTabs";
 import { imageFileToDataUrl } from "../lib/files";
 import { hasFeatureAccess, isPlatformFeatureGranted, isPlatformFeatureRestricted } from "../lib/permissions";
+import { readProposalContext, patchProposalContext, clearProposalContext } from "../lib/proposalContext";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreditConfirmModal from "../components/CreditConfirmModal";
 import { useDemoTour } from "../context/DemoTourContext";
@@ -306,6 +307,7 @@ export default function BlueprintPage() {
   const { triggerDemoGate } = useDemoTour() || {};
   const navigate = useNavigate();
   const workspaceIdStored = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceNameStored = useWorkspaceStore((s) => s.workspaceName);
   const workspaceLogoStored = useWorkspaceStore((s) => s.workspaceLogo);
   const setWorkspaceIdStored = useWorkspaceStore((s) => s.setWorkspaceId);
   const setWorkspaceNameStored = useWorkspaceStore((s) => s.setWorkspaceName);
@@ -324,8 +326,17 @@ export default function BlueprintPage() {
   const authEmail = useAuthStore((s) => s.email);
   const subscription = useAuthStore((s) => s.subscription);
   const livePlanHref = "/business-plan";
+  const [hasLivePlan, setHasLivePlan] = useState(false);
+  const [showPlanChoice, setShowPlanChoice] = useState(false);
 
   useEffect(() => { refreshGrants(); }, []);
+
+  useEffect(() => {
+    if (!workspaceIdStored) return;
+    apiRequest(`/businesses/${workspaceIdStored}/live-plan`, "GET")
+      .then((res) => { if (res?.plan) setHasLivePlan(true); })
+      .catch(() => {});
+  }, [workspaceIdStored]);
 
   const isFreeOrTrial = !subscription ||
     ["free_trial", "explorer", "expired"].includes(subscription?.plan_key) ||
@@ -344,9 +355,14 @@ export default function BlueprintPage() {
   const [bpSearchParams, setBpSearchParams] = useSearchParams();
   const autoGenerateRef = useRef(false);
   const [fromValidation, setFromValidation] = useState(false);
+  // Set when arriving via ApplyModal's "Use EnterprateAI" option — holds the
+  // proposal context so we can hand a generated PDF back to the submission.
+  const [mktReturn, setMktReturn] = useState(null);
+  const [mktBusy, setMktBusy] = useState(false);
   useEffect(() => {
     const d = bpSearchParams.get("doc");
     const vws = bpSearchParams.get("validation_workspace");
+    const from = bpSearchParams.get("from");
     if (d) {
       setSelectedDoc(d);
       setError(null);
@@ -361,8 +377,58 @@ export default function BlueprintPage() {
       setFromValidation(true);
       autoGenerateRef.current = true;
     }
-    if (d || vws) setBpSearchParams({}, { replace: true });
+    if (from === "marketplace") {
+      const ctx = readProposalContext();
+      if (ctx?.recipientWorkspaceId) {
+        setMktReturn(ctx);
+        setSelectedDoc("client_proposal");
+        setIsModalOpen(true);
+        setShowInputs(true);
+        setError(null);
+        // The actual field prefill happens in the effect below, once the
+        // client_proposal form has mounted and its own loaders have settled.
+      }
+    }
+    if (d || vws || from) setBpSearchParams({}, { replace: true });
   }, []); // eslint-disable-line
+
+  function cancelMktReturn() {
+    const dest = mktReturn?.origin || "/marketplace";
+    clearProposalContext();
+    setMktReturn(null);
+    navigate(dest);
+  }
+
+  async function attachProposalAndReturn() {
+    const docId = docIdByType["client_proposal"];
+    if (!docId || String(docId).startsWith("local:")) {
+      setError("Generate and save the proposal first, then attach it.");
+      return;
+    }
+    setMktBusy(true);
+    setError(null);
+    try {
+      const t = localStorage.getItem("ea_token");
+      const auth = t ? { Authorization: `Bearer ${t}` } : {};
+      const exp = await fetch(`${getApiBaseUrl()}/blueprint/documents/${docId}/export?format=pdf`, { headers: auth });
+      if (!exp.ok) throw new Error("Could not export the proposal as a PDF. Try again.");
+      const blob = await exp.blob();
+      if (!blob || blob.size === 0) throw new Error("The exported PDF was empty. Regenerate the proposal.");
+      const slug = String(mktReturn?.recipientName || "business").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "business";
+      const file = new File([blob], `proposal-${slug}.pdf`, { type: "application/pdf" });
+      const fd = new FormData();
+      fd.append("file", file);
+      const up = await fetch(`${getApiBaseUrl()}/proposals/upload-attachment`, { method: "POST", headers: auth, body: fd });
+      if (!up.ok) throw new Error((await up.json().catch(() => ({})))?.detail || "Could not attach the PDF.");
+      const meta = await up.json();
+      patchProposalContext({ blueprintReturn: { attachment: meta, docId } });
+      navigate(mktReturn?.origin || "/marketplace");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong attaching the proposal.");
+    } finally {
+      setMktBusy(false);
+    }
+  }
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showInputs, setShowInputs] = useState(true);
   const [inputsTab, setInputsTab] = useState("inputs");
@@ -627,6 +693,48 @@ export default function BlueprintPage() {
     }
   }, [selectedDoc]);
 
+  // Prefill the proposal from the marketplace request that sent the user here.
+  // Runs once, after the client_proposal form is the active doc, so the
+  // proposer edits a populated form and the generation uses the brief.
+  const mktPrefilledRef = useRef(false);
+  useEffect(() => {
+    if (!mktReturn || mktPrefilledRef.current || selectedDoc !== "client_proposal") return;
+    mktPrefilledRef.current = true;
+
+    // Client — the recipient of the proposal. Force the "type a name" path so
+    // the field renders, and fill it. (Business name is the proposer's own and
+    // is left to the workspace auto-fill.)
+    setSelectedCustomerId(OTHER_CUSTOMER_ID);
+    if (mktReturn.recipientName) {
+      setCustomClientName(mktReturn.recipientName);
+      setBillTo(mktReturn.recipientName);
+    }
+
+    // Problem — always seeded from the request so the proposal answers the
+    // brief, not the proposer's own workspace data. Force it (mark dirty) so
+    // Blueprint's own loaders don't overwrite it.
+    const reqLines = (mktReturn.requirements || [])
+      .map((r) => (typeof r === "string" ? r : r?.text))
+      .filter(Boolean)
+      .map((t) => `- ${t}`);
+    const briefParts = [];
+    if (mktReturn.requestTitle) briefParts.push(`${mktReturn.recipientName || "The client"} is requesting: ${mktReturn.requestTitle}.`);
+    if (mktReturn.requestDescription) briefParts.push(mktReturn.requestDescription);
+    if (reqLines.length) briefParts.push(`Requirements to address:\n${reqLines.join("\n")}`);
+    const brief = briefParts.join("\n\n").trim();
+    if (brief) {
+      setDirtyFields((p) => ({ ...p, problem: true }));
+      setProblem(brief);
+    }
+
+    // Title
+    setProposalTitle(
+      mktReturn.requestTitle
+        ? `Proposal: ${mktReturn.requestTitle}`
+        : (mktReturn.recipientName ? `Proposal for ${mktReturn.recipientName}` : ""),
+    );
+  }, [mktReturn, selectedDoc]); // eslint-disable-line
+
   useEffect(() => {
     if (!isLoading) return;
     setDidYouKnowIndex(0);
@@ -652,7 +760,7 @@ export default function BlueprintPage() {
 
     // Workspace profile is master data — it wins over idea validation for all master fields
     if (!dirtyFields.companyName && !companyName) {
-      const name = workspaceProfile?.company_name || ctx.business_name || "";
+      const name = workspaceProfile?.company_name || ctx.business_name || workspaceNameStored || "";
       if (name) setCompanyName(name);
     }
     if (!dirtyFields.industry && !industry) {
@@ -789,7 +897,7 @@ export default function BlueprintPage() {
 
         // Master data fields: workspace profile always wins; idea validation only fills genuine gaps
         if (!dirtyFields.companyName && !companyName)
-          setCompanyName(workspaceProfile.company_name || profile.business_name || "");
+          setCompanyName(workspaceProfile.company_name || profile.business_name || workspaceNameStored || "");
         if (!dirtyFields.industry && !industry) {
           const ivSector = ivCtx.sector_category === "Other" ? (ivCtx.sector_other || "") : (ivCtx.sector_category || ivCtx.sector || "");
           setIndustry(workspaceProfile.primary_industry || profile.primary_industry || ivSector || profile.business_type || ivCtx.primary_industry || ivCtx.business_type || "");
@@ -2555,6 +2663,8 @@ export default function BlueprintPage() {
             {error}
           </div>
         ) : null}
+
+        <div id="documents" />
         <SectionCard title="Documents" subtitle="Click a document to generate it.">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {DOCUMENTS.map((d) => {
@@ -2565,8 +2675,8 @@ export default function BlueprintPage() {
                   type="button"
                   onClick={() => {
                     if (!canAccess) return;
-                    if (d.id === "business_plan" && import.meta.env.VITE_ENABLE_LIVE_PLAN) {
-                      navigate(livePlanHref);
+                    if (d.id === "business_plan") {
+                      setShowPlanChoice(true);
                       return;
                     }
                     openDoc(d.id);
@@ -2606,6 +2716,39 @@ export default function BlueprintPage() {
           </div>
         </SectionCard>
 
+        {showPlanChoice && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowPlanChoice(false)}>
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-1 text-base font-semibold text-slate-900">Choose a plan</div>
+              <div className="mb-4 text-xs text-slate-500">Generate the standard business plan or open the live business plan for ongoing tracking.</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-sm font-semibold text-slate-900">Generate business plan</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">Create a structured business plan from your blueprint inputs.</div>
+                  <div className="mt-4">
+                    <button type="button" onClick={() => { setShowPlanChoice(false); openDoc("business_plan"); }}
+                      className="inline-flex items-center justify-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700">
+                      Generate
+                    </button>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
+                  <div className="text-sm font-semibold text-slate-900">Live business plan</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">Track assumptions, KPIs, and performance over time.</div>
+                  <div className="mt-4">
+                    <Link to="/business-plan" className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700">
+                      Open live plan
+                    </Link>
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={() => setShowPlanChoice(false)}
+                className="mt-4 text-xs text-slate-400 hover:text-slate-600">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {visibleSavedDocs.length ? (
           <SectionCard title="Saved Documents" subtitle="Open and edit your generated documents anytime.">
@@ -2651,6 +2794,7 @@ export default function BlueprintPage() {
             </div>
           </SectionCard>
         ) : null}
+
 
       </div>
 
@@ -3469,6 +3613,36 @@ export default function BlueprintPage() {
           onConfirm={confirmDialog.onConfirm}
           onCancel={confirmDialog.onCancel}
         />
+      ) : null}
+
+      {mktReturn ? (
+        <div className="fixed inset-x-0 bottom-0 z-[80] border-t border-brand-200 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-brand-800/60 dark:bg-slate-900/95">
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 text-sm">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">Preparing a proposal</span>
+              <span className="text-slate-500 dark:text-slate-400">
+                {" "}for {mktReturn.recipientName || "a business"}{mktReturn.requestTitle ? ` · ${mktReturn.requestTitle}` : ""}
+              </span>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                Generate the proposal below, then attach it to your submission.
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={cancelMktReturn} className="text-[13px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={attachProposalAndReturn}
+                disabled={mktBusy || !docIdByType["client_proposal"] || String(docIdByType["client_proposal"] || "").startsWith("local:")}
+                className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-brand-700 disabled:opacity-50"
+              >
+                {mktBusy ? <Spinner size={14} /> : null}
+                {mktBusy ? "Attaching…" : "Attach to proposal & continue"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

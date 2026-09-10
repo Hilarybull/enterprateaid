@@ -624,6 +624,15 @@ export default function FinancialsPage() {
   }, [activeInvoices, activeExpenses, fxRates, currency]);
 
   const financialReportRows = useMemo(() => {
+    function toWs(amount, cur) {
+      const num = Number(amount || 0);
+      const fromIso = _resolveIso(cur);
+      if (!fromIso) return num;
+      const wsIso = _wsIso();
+      if (fromIso === wsIso) return num;
+      const rate = fxRates[fromIso];
+      return rate != null ? Math.round(num * rate * 100) / 100 : num;
+    }
     const paidInvs = activeInvoices.filter(i => String(i.status || "").toLowerCase() === "paid");
     const deliveredInvs = activeInvoices.filter(i => String(i.status || "").toLowerCase() === "delivered");
     const earnedInvs = [...paidInvs, ...deliveredInvs];
@@ -645,20 +654,33 @@ export default function FinancialsPage() {
         const d = new Date(i.paid_at || i.issued_at || i.created_at || i.updated_at || "");
         if (!Number.isFinite(d.getTime())) return;
         const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
-        byMonth.set(key, (byMonth.get(key) || 0) + Number(i.total_amount || i.subtotal_amount || 0));
+        byMonth.set(key, (byMonth.get(key) || 0) + toWs(i.total_amount || i.subtotal_amount || 0, i.currency));
       });
       if (!byMonth.size) return 0;
       return byMonth.get([...byMonth.keys()].sort().at(-1)) || 0;
     }
-    const totalRevenue = paidInvs.reduce((s, i) => s + Number(i.total_amount || 0), 0);
-    const totalCos = paidInvs.reduce((s, i) => s + Number(i.cost_of_sales || 0), 0);
-    const totalExpenses = reportExpenses.reduce((s, e) => s + Number(e.price || e.total_amount || 0), 0);
+    const totalRevenue = paidInvs.reduce((s, i) => s + toWs(i.total_amount || 0, i.currency), 0);
+    const totalCos = paidInvs.reduce((s, i) => s + toWs(i.cost_of_sales || 0, i.currency), 0);
+    const totalExpenses = reportExpenses.reduce((s, e) => s + toWs(e.price || e.total_amount || 0, e.currency), 0);
     const monthlyRevenue = earnedInvs.length ? mostRecentMonthRev(earnedInvs) : 0;
     const monthlyCos = totalCos / dmc(paidInvs);
     const monthlyExp = totalExpenses / dmc(reportExpenses);
     const grossMargin = monthlyRevenue > 0 ? (((monthlyRevenue - monthlyCos) / monthlyRevenue) * 100).toFixed(1) : null;
-    const pendingReceivablesTotal = activeInvoices.filter(i => String(i.status || "").toLowerCase() !== "paid").reduce((s, i) => s + Number(i.total_amount || 0), 0);
-    const pendingPayablesTotal = activeExpenses.filter(e => String(e.status || "").toLowerCase() !== "paid").reduce((s, e) => s + Number(e.price || e.total_amount || 0), 0);
+    function _paidAmt(i) {
+      if (Array.isArray(i.payments) && i.payments.length > 0) return i.payments.reduce((s, p) => s + Number(p.amount), 0);
+      if (i.payment_type === "partial" && i.paid_amount != null) return Number(i.paid_amount);
+      return String(i.status || "").toLowerCase() === "paid" ? Number(i.total_amount || 0) : 0;
+    }
+    const pendingReceivablesTotal = activeInvoices
+      .filter(i => {
+        const st = String(i.status || "").toLowerCase();
+        if (st === "paid") return _paidAmt(i) < Number(i.total_amount || 0);
+        return true;
+      })
+      .reduce((s, i) => s + toWs(Math.max(0, Number(i.total_amount || 0) - _paidAmt(i)), i.currency), 0);
+    const pendingPayablesTotal = activeExpenses
+      .filter(e => String(e.status || "").toLowerCase() !== "paid")
+      .reduce((s, e) => s + toWs(e.price || e.total_amount || 0, e.currency), 0);
     const kpiTiles = [
       { label: "Monthly run rate", value: formatMoney(monthlyRevenue) },
       { label: "Gross margin", value: grossMargin != null ? `${grossMargin}%` : "—" },
@@ -668,12 +690,12 @@ export default function FinancialsPage() {
     // Resolve customer/vendor names from catalogue so they match what the Invoices/Contracts tabs show
     const resolveName = (id, fallback) => resolveCustomer(id, fallback)?.name || fallback || "—";
     const resolveVendorName = (id, fallback) => resolveVendor(id, fallback)?.name || fallback || "—";
-    const invoiceListRaw = [...activeInvoices].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,30).map(inv=>({customer:resolveName(inv.customer_id, inv.customer_name),items:Array.isArray(inv.product_names)&&inv.product_names.length?inv.product_names.join(", "):inv.product_name||"—",amount:formatMoney(Number(inv.total_amount||0)),due:inv.due_date?new Date(inv.due_date).toLocaleDateString():inv.issued_at?new Date(inv.issued_at).toLocaleDateString():"—",status:String(inv.status||"pending")}));
-    const quoteListRaw = [...activeQuotes].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,20).map(q=>({customer:resolveName(q.customer_id, q.customer_name),items:Array.isArray(q.product_names)&&q.product_names.length?q.product_names.join(", "):q.product_name||"—",amount:formatMoney(Number(q.total_amount||q.subtotal_amount||0)),validity:q.validity_days?`${q.validity_days}d`:"—",status:String(q.status||"draft")}));
-    const expenseListRaw = [...activeExpenses].sort((a,b)=>new Date(b.created_at||b.updated_at||0)-new Date(a.created_at||a.updated_at||0)).slice(0,20).map(e=>({vendor:resolveVendorName(e.vendor_id, e.vendor_name||e.counterparty_name),description:e.description||e.expense_type||e.item||"—",amount:formatMoney(Number(e.price||e.total_amount||0)),due:e.due_date?new Date(e.due_date).toLocaleDateString():"—",status:String(e.status||"pending")}));
+    const invoiceListRaw = [...activeInvoices].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,30).map(inv=>{const _st=String(inv.status||"pending");const _paid=_paidAmt(inv);const _total=Number(inv.total_amount||0);const _remaining=Math.max(0,_total-_paid);const _displaySt=_paid>0&&_paid<_total?"partially paid":_st;return{customer:resolveName(inv.customer_id,inv.customer_name),items:Array.isArray(inv.product_names)&&inv.product_names.length?inv.product_names.join(", "):inv.product_name||"—",amount:formatMoney(_total,inv.currency),amountPaid:_paid>0?formatMoney(_paid,inv.currency):"—",amountRemaining:_remaining>0?formatMoney(_remaining,inv.currency):"—",due:inv.due_date?new Date(inv.due_date).toLocaleDateString():inv.issued_at?new Date(inv.issued_at).toLocaleDateString():"—",status:_displaySt};});
+    const quoteListRaw = [...activeQuotes].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,20).map(q=>({customer:resolveName(q.customer_id, q.customer_name),items:Array.isArray(q.product_names)&&q.product_names.length?q.product_names.join(", "):q.product_name||"—",amount:formatMoney(Number(q.total_amount||q.subtotal_amount||0),q.currency),validity:q.validity_days?`${q.validity_days}d`:"—",status:String(q.status||"draft")}));
+    const expenseListRaw = [...activeExpenses].sort((a,b)=>new Date(b.created_at||b.updated_at||0)-new Date(a.created_at||a.updated_at||0)).slice(0,20).map(e=>({vendor:resolveVendorName(e.vendor_id, e.vendor_name||e.counterparty_name),description:e.description||e.expense_type||e.item||"—",amount:formatMoney(Number(e.price||e.total_amount||0),e.currency),due:e.due_date?new Date(e.due_date).toLocaleDateString():"—",status:String(e.status||"pending")}));
     const contractListRaw = [...activeContracts].sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).map(c=>{const party=c.contract_type==="sales"?resolveCustomer(c.counterparty_id,c.counterparty_name):resolveVendor(c.counterparty_id,c.counterparty_name);return{counterparty:party?.name||c.counterparty_name||"—",type:c.contract_type||"—",price:formatMoney(Number(c.price||0)),cos:formatMoney(Number(c.cost_of_sales||0)),terms:c.payment_terms||"—",status:String(c.status||"active")};});
     return { kpiTiles, invoiceListRaw, quoteListRaw, expenseListRaw, contractListRaw, monthlyExp };
-  }, [activeInvoices, activeQuotes, activeExpenses, activeContracts, activeCustomers, activeVendors]); // eslint-disable-line
+  }, [activeInvoices, activeQuotes, activeExpenses, activeContracts, activeCustomers, activeVendors, fxRates, currency]); // eslint-disable-line
 
   const hasArchiveWarning = useMemo(() => {
     const list = [...archivedInvoices, ...archivedQuotes, ...archivedExpenses, ...archivedContracts];
@@ -1257,7 +1279,7 @@ export default function FinancialsPage() {
   <div style="text-align:right;font-size:11px;color:#64748b;">${new Date().toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"})}</div>
 </div>
 ${kpis !== null ? `<div class="kpi-grid">${kpis.map((k) => `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#64748b;">${k.label}</div><div style="font-size:18px;font-weight:700;margin-top:4px;">${k.value}</div></div>`).join("")}</div>` : ""}
-${invoiceList !== null ? section("Invoices","All active invoices, paid and pending.",table(["Customer","Items / Services","Amount","Due / Issued","Status"],invoiceList.map((i)=>[i.customer,i.items,i.amount,i.due,i.status]))) : ""}
+${invoiceList !== null ? section("Invoices","All active invoices, paid and pending.",table(["Customer","Items / Services","Amount","Paid","Remaining","Due / Issued","Status"],invoiceList.map((i)=>[i.customer,i.items,i.amount,i.amountPaid,i.amountRemaining,i.due,i.status]))) : ""}
 ${quoteList !== null ? section("Quotation pipeline","Active quotes sent or in draft.",table(["Customer","Items","Amount","Valid","Status"],quoteList.map((q)=>[q.customer,q.items,q.amount,q.validity,q.status]))) : ""}
 ${expenseList !== null ? section("Expenses","Vendor payables.",table(["Vendor","Description","Amount","Due","Status"],expenseList.map((e)=>[e.vendor,e.description,e.amount,e.due,e.status]))) : ""}
 ${contractList !== null ? section("Contracts","Active contracts and their value.",table(["Counterparty","Type","Price","Cost of sales","Terms","Status"],contractList.map((c)=>[c.counterparty,c.type,c.price,c.cos,c.terms,c.status]))) : ""}
@@ -2433,11 +2455,11 @@ th{text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:#64748b;}
             ...(canViewFinancialsOverview ? [{ value: "overview", label: "Overview" }] : []),
             ...(canFinancialsFeature("invoices") ? [{ value: "invoices", label: "Invoices", "data-tour": "financials-invoices-tab" }] : []),
             ...(canFinancialsFeature("quotations") ? [{ value: "quotes", label: "Quotations" }] : []),
+            { value: "proposals", label: proposalsUnread ? `Proposals (${proposalsUnread})` : "Proposals" },
             ...(canFinancialsFeature("expenses") ? [{ value: "expenses", label: "Expenses" }] : []),
             ...(canFinancialsFeature("contracts") ? [{ value: "contracts", label: "Contracts" }] : []),
             { value: "receipts", label: "Receipts" },
             { value: "report", label: "Report" },
-            { value: "proposals", label: proposalsUnread ? `Proposals (${proposalsUnread})` : "Proposals" },
           ]}
         />
       </div>
@@ -2446,7 +2468,7 @@ th{text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:#64748b;}
       <div className="mt-6 space-y-4"> {/* overview */}
 
         {/* KPI tiles */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-9 xl:grid-cols-9">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9">
           {[
             { label: "Annual Recurring Revenue", value: formatMoney(overviewKpis.arr), sub: "annualised from current revenue", tone: "slate", type: "invoices-paid", wide: true, items: activeInvoices.filter((i) => String(i.status || "").toLowerCase() === "paid") },
             { label: "Revenue", value: formatMoney(overviewKpis.totalRevenue), sub: "paid + delivered (accrual)", tone: "emerald", type: "invoices-paid", items: activeInvoices.filter((i) => String(i.status || "").toLowerCase() === "paid") },
@@ -2461,13 +2483,13 @@ th{text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:#64748b;}
             return (
               <button key={kpi.label} type="button"
                 onClick={() => setOverviewDrill(isOpen ? null : { label: kpi.label, type: kpi.type, items: kpi.items })}
-                className={`rounded-2xl border bg-white p-3 shadow-sm text-left w-full transition hover:shadow-md ${kpi.wide ? "lg:col-span-2" : ""} ${isOpen ? "border-brand-400 ring-1 ring-brand-200" : "border-slate-200 hover:border-slate-300"}`}
+                className={`rounded-2xl border bg-white p-3 shadow-sm text-left w-full min-w-0 overflow-hidden transition hover:shadow-md ${kpi.wide ? "lg:col-span-2" : ""} ${isOpen ? "border-brand-400 ring-1 ring-brand-200" : "border-slate-200 hover:border-slate-300"}`}
               >
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 leading-tight">{kpi.label}</div>
-                <div className={`mt-1.5 text-lg font-bold leading-tight font-variant-numeric tabular-nums ${kpi.tone === "emerald" ? "text-emerald-600" : kpi.tone === "rose" ? "text-rose-600" : kpi.tone === "amber" ? "text-amber-600" : "text-slate-900"}`}>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 leading-tight truncate">{kpi.label}</div>
+                <div className={`mt-1.5 text-base font-bold leading-tight tabular-nums truncate ${kpi.tone === "emerald" ? "text-emerald-600" : kpi.tone === "rose" ? "text-rose-600" : kpi.tone === "amber" ? "text-amber-600" : "text-slate-900"}`}>
                   {kpi.value}
                 </div>
-                <div className="mt-1 text-[10px] text-slate-500 leading-snug">{kpi.sub}</div>
+                <div className="mt-1 text-[10px] text-slate-500 leading-snug line-clamp-2">{kpi.sub}</div>
               </button>
             );
           })}
@@ -4663,7 +4685,14 @@ th{text-transform:uppercase;letter-spacing:.05em;font-size:11px;color:#64748b;}
         const monthlyCos = totalCos / Math.max(1, _dmc(revenueInvs));
         const monthlyExp = totalExpenses / expMonths;
         const grossMargin = monthlyRevenue > 0 ? (((monthlyRevenue - monthlyCos) / monthlyRevenue) * 100).toFixed(1) : null;
-        const pendingReceivablesTotal = activeInvoices.filter(i => String(i.status || "").toLowerCase() !== "paid").reduce((s, i) => s + Number(i.total_amount || 0), 0);
+        function _paidAmtPdf(i) {
+          if (Array.isArray(i.payments) && i.payments.length > 0) return i.payments.reduce((s, p) => s + Number(p.amount), 0);
+          if (i.payment_type === "partial" && i.paid_amount != null) return Number(i.paid_amount);
+          return String(i.status || "").toLowerCase() === "paid" ? Number(i.total_amount || 0) : 0;
+        }
+        const pendingReceivablesTotal = activeInvoices
+          .filter(i => String(i.status || "").toLowerCase() !== "paid")
+          .reduce((s, i) => s + Math.max(0, Number(i.total_amount || 0) - _paidAmtPdf(i)), 0);
         const pendingPayablesTotal = activeExpenses.filter(e => String(e.status || "").toLowerCase() !== "paid").reduce((s, e) => s + Number(e.price || e.total_amount || 0), 0);
 
         const invoiceRows = [...activeInvoices]

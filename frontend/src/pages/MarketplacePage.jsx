@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiRequest } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useWorkspaceStore } from "../store/workspace";
 import Spinner from "../components/Spinner";
 import logoUrl from "../enterprate-logo.png";
 import ApplyModal from "../components/proposals/ApplyModal";
+import { readProposalContext } from "../lib/proposalContext";
 import { useDemoTour } from "../context/DemoTourContext";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -459,7 +460,7 @@ function ProductCard({ product, onOpen, onRequestQuote, onCompanyClick, isOwn })
 
 // ─── business card ────────────────────────────────────────────────────────────
 
-function BusinessCard({ listing, onClick, isOwn, viewCount, onViewsClick }) {
+function BusinessCard({ listing, onClick, isOwn, viewCount, onViewsClick, onApproach }) {
   const grad = avatarGradient(listing.company_name);
   const hasLogo = listing.logo_data_url && listing.logo_data_url.startsWith("data:");
   return (
@@ -538,6 +539,15 @@ function BusinessCard({ listing, onClick, isOwn, viewCount, onViewsClick }) {
               <span className="text-[11px] font-semibold text-brand-600 group-hover:text-brand-700 dark:text-brand-400">View Profile →</span>
             )}
           </div>
+          {!isOwn && listing.is_open_to_proposals && onApproach ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onApproach(listing); }}
+              className="w-full rounded-xl border border-brand-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-brand-700 transition hover:bg-brand-50 dark:border-brand-700 dark:bg-slate-900 dark:text-brand-300 dark:hover:bg-brand-900/20"
+            >
+              Send a proposal
+            </button>
+          ) : null}
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 text-[11px] text-slate-500 dark:text-slate-400">
               {listing.phone_number ? (
@@ -1231,11 +1241,33 @@ export default function MarketplacePage() {
   const isLoggedIn = Boolean(token);
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
 
-  const [activeTab, setActiveTab] = useState("products"); // "products" | "profiles"
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTabState] = useState(() => {
+    if (searchParams.get("tab") === "requests") return "requests";
+    if (searchParams.get("tab") === "products") return "products";
+    // Returning from a proposal detour (Blueprint / sign-in) for a request —
+    // land back on the requests tab, not products.
+    const ctx = readProposalContext();
+    if ((ctx?.blueprintReturn?.attachment || ctx?.draft) && ctx.requestId) return "requests";
+    return "products";
+  }); // "products" | "requests"
+  // Keep the tab in the URL so a refresh stays on it.
+  const syncTabToUrl = (v) => {
+    const n = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    n.set("tab", v);
+    setSearchParams(n, { replace: true });
+  };
+  const setActiveTab = (v) => { setActiveTabState(v); syncTabToUrl(v); };
+  useEffect(() => {
+    if (!searchParams.get("tab")) syncTabToUrl(activeTab);
+  }, []); // eslint-disable-line
   const [listings, setListings] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [proposalRequests, setProposalRequests] = useState([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
 
   const [myStatus, setMyStatus] = useState(null);
   const [profileViews, setProfileViews] = useState(null);
@@ -1255,8 +1287,42 @@ export default function MarketplacePage() {
   const [selected, setSelected] = useState(null);
   const [gateAction, setGateAction] = useState(null);
   const [rfqTarget, setRfqTarget] = useState(null);
-  const [approachTarget, setApproachTarget] = useState(null);
+  const [approachTarget, setApproachTarget] = useState(() => {
+    // Coming back to an unsolicited proposal after a Blueprint round-trip or a sign-in.
+    const ctx = readProposalContext();
+    return (ctx?.blueprintReturn?.attachment || ctx?.draft) && !ctx.requestId && ctx.recipientWorkspaceId
+      ? { workspace_id: ctx.recipientWorkspaceId, company_name: ctx.recipientName }
+      : null;
+  });
   const [serviceDetail, setServiceDetail] = useState(null); // { service, listing }
+  const [requestApply, setRequestApply] = useState(() => {
+    // Coming back to a request-linked proposal after a Blueprint round-trip or a sign-in.
+    const ctx = readProposalContext();
+    return (ctx?.blueprintReturn?.attachment || ctx?.draft) && ctx.requestId && ctx.recipientWorkspaceId
+      ? {
+          recipientWorkspaceId: ctx.recipientWorkspaceId,
+          recipientName: ctx.recipientName,
+          request: {
+            id: ctx.requestId,
+            title: ctx.requestTitle,
+            description: ctx.requestDescription,
+            requirements: ctx.requirements || [],
+          },
+        }
+      : null;
+  }); // { recipientWorkspaceId, recipientName, request }
+  const [copiedReqId, setCopiedReqId] = useState(null);
+
+  function shareRequest(id) {
+    const url = `${typeof window !== "undefined" ? window.location.origin : ""}/marketplace/request/${id}`;
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: "Proposal request", url }).catch(() => {});
+      return;
+    }
+    navigator.clipboard?.writeText(url).catch(() => {});
+    setCopiedReqId(id);
+    setTimeout(() => setCopiedReqId((c) => (c === id ? null : c)), 1600);
+  }
 
   const PAGE_SIZE = 24;
 
@@ -1296,6 +1362,19 @@ export default function MarketplacePage() {
     load();
     return () => { alive = false; };
   }, [debouncedSearch, filterIndustry, filterType, page, refreshKey]);
+
+  useEffect(() => {
+    if (activeTab !== "requests") return;
+    let alive = true;
+    setRequestsLoading(true);
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    apiRequest(`/proposals/public/requests${params.toString() ? `?${params}` : ""}`, "GET")
+      .then((res) => { if (alive) setProposalRequests(res.items || []); })
+      .catch(() => { if (alive) setProposalRequests([]); })
+      .finally(() => { if (alive) setRequestsLoading(false); });
+    return () => { alive = false; };
+  }, [activeTab, debouncedSearch]);
 
   useEffect(() => {
     if (!isLoggedIn || !workspaceId) return;
@@ -1466,28 +1545,30 @@ export default function MarketplacePage() {
         {/* Tour-only hidden tab anchor */}
         <button data-tour="marketplace-products-tab" className="hidden" aria-hidden="true" tabIndex={-1} />
         <button data-tour="marketplace-profiles-tab" className="hidden" aria-hidden="true" tabIndex={-1} />
-        <div className="mt-6" />
+
+        <div className="mx-auto mt-6 flex max-w-md gap-1 rounded-2xl bg-white/15 p-1 backdrop-blur">
+          {[
+            { v: "products", l: "Products & Services" },
+            { v: "requests", l: "Proposal Requests" },
+          ].map((t) => (
+            <button
+              key={t.v}
+              type="button"
+              onClick={() => { setActiveTab(t.v); setPage(1); }}
+              className={
+                "flex-1 rounded-xl px-3 py-2 text-[12px] font-semibold transition " +
+                (activeTab === t.v ? "bg-white text-brand-700 shadow-sm" : "text-white/80 hover:text-white")
+              }
+            >
+              {t.l}
+            </button>
+          ))}
+        </div>
+        <div className="mt-4" />
       </div>
 
       {/* Main content */}
       <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
-        {/* Proposal requests entry point */}
-        <button
-          onClick={() => navigate("/marketplace/requests")}
-          className="mb-5 flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left transition hover:border-brand-300 hover:shadow-sm dark:border-slate-700 dark:bg-slate-900"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-100 text-brand-600 dark:bg-brand-900/50 dark:text-brand-400">
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 15h6M9 11h4" /></svg>
-            </div>
-            <div>
-              <div className="text-[13px] font-bold text-slate-800 dark:text-slate-200">Open proposal requests</div>
-              <div className="text-[12px] text-slate-500 dark:text-slate-400">Browse briefs from businesses looking for proposals, and apply.</div>
-            </div>
-          </div>
-          <svg className="h-4 w-4 shrink-0 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
-        </button>
-
         {/* Publish banner */}
         {isLoggedIn && myStatus && !myStatus.is_published && (
           <div className="mb-5 flex items-center justify-between gap-4 rounded-2xl border border-brand-200 bg-gradient-to-r from-brand-50 to-accent-50 px-5 py-4 dark:border-brand-800 dark:from-brand-900/20 dark:to-accent-900/20">
@@ -1574,6 +1655,11 @@ export default function MarketplacePage() {
               {total} business{total !== 1 ? "es" : ""}
             </span>
           )}
+          {activeTab === "requests" && !requestsLoading && (
+            <span className="ml-auto text-[12px] text-slate-400 dark:text-slate-500">
+              {proposalRequests.length} request{proposalRequests.length !== 1 ? "s" : ""}
+            </span>
+          )}
         </div>
 
         {/* Filter panel */}
@@ -1614,9 +1700,9 @@ export default function MarketplacePage() {
         )}
 
         {/* Content */}
-        {error ? (
+        {error && activeTab !== "requests" ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">{error}</div>
-        ) : loading ? (
+        ) : loading && activeTab !== "requests" ? (
           <div className="flex flex-col items-center justify-center py-24 gap-4">
             <Spinner size={24} />
             <p className="text-sm text-slate-500 dark:text-slate-400">Loading marketplace…</p>
@@ -1655,6 +1741,85 @@ export default function MarketplacePage() {
               })}
             </div>
           )
+        ) : activeTab === "requests" ? (
+          /* ── Proposal Requests tab ── */
+          requestsLoading ? (
+            <div className="flex flex-col items-center justify-center py-24 gap-4">
+              <Spinner size={24} />
+              <p className="text-sm text-slate-500 dark:text-slate-400">Loading requests…</p>
+            </div>
+          ) : proposalRequests.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 dark:bg-slate-800">
+                <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 15h6M9 11h4" /></svg>
+              </div>
+              <h3 className="text-base font-semibold text-slate-700 dark:text-slate-300">No open proposal requests</h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Businesses looking for proposals will post their briefs here.</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {proposalRequests.map((r) => {
+                const deadline = r.deadline ? new Date(r.deadline) : null;
+                return (
+                  <div key={r.id} className="ea-card flex flex-col p-5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-lg bg-brand-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
+                        {String(r.type || "general").replace(/^\w/, (c) => c.toUpperCase())}
+                      </span>
+                      {deadline && !Number.isNaN(deadline.getTime()) ? (
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500">Deadline {deadline.toLocaleDateString()}</span>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/marketplace/request/${r.id}`)}
+                      className="mt-2 text-left"
+                    >
+                      <h3 className="text-[15px] font-bold text-slate-900 hover:text-brand-700 dark:text-slate-100">{r.title}</h3>
+                      {r.company_name ? <p className="text-[12px] text-slate-500 dark:text-slate-400">{r.company_name}</p> : null}
+                    </button>
+                    {r.description ? (
+                      <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed text-slate-600 dark:text-slate-400">{r.description}</p>
+                    ) : null}
+                    <div className="mt-auto flex items-center gap-1 pt-4">
+                      <button
+                        type="button"
+                        title={copiedReqId === r.id ? "Link copied" : "Share"}
+                        onClick={() => shareRequest(r.id)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+                      >
+                        {copiedReqId === r.id ? (
+                          <svg className="h-4 w-4 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5" /></svg>
+                        ) : (
+                          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" /></svg>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        title="View details"
+                        onClick={() => navigate(`/marketplace/request/${r.id}`)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+                      </button>
+                      <button
+                        type="button"
+                        title="Apply now"
+                        onClick={() => setRequestApply({
+                          recipientWorkspaceId: r.workspace_id,
+                          recipientName: r.company_name,
+                          request: { id: r.id, title: r.title, description: r.description, requirements: r.requirements || [] },
+                        })}
+                        className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white transition hover:bg-brand-700"
+                      >
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )
         ) : (
           /* ── Profiles tab ── */
           listings.length === 0 ? (
@@ -1685,7 +1850,8 @@ export default function MarketplacePage() {
                   const isOwn = isLoggedIn && myStatus?.is_published && l.workspace_id === (myStatus?.workspace_id || workspaceId);
                   return (
                     <BusinessCard key={l.workspace_id} listing={l} onClick={setSelected} isOwn={isOwn}
-                      viewCount={isOwn ? profileViews?.total : null} onViewsClick={() => setShowViews(true)} />
+                      viewCount={isOwn ? profileViews?.total : null} onViewsClick={() => setShowViews(true)}
+                      onApproach={(listing) => setApproachTarget(listing)} />
                   );
                 })}
               </div>
@@ -1753,6 +1919,15 @@ export default function MarketplacePage() {
           recipientName={approachTarget.company_name}
           onClose={() => { setApproachTarget(null); setSelected(null); }}
           onSubmitted={() => {}}
+        />
+      )}
+      {requestApply && (
+        <ApplyModal
+          recipientWorkspaceId={requestApply.recipientWorkspaceId}
+          recipientName={requestApply.recipientName}
+          request={requestApply.request}
+          onClose={() => setRequestApply(null)}
+          onSubmitted={() => setRequestApply(null)}
         />
       )}
       {gateAction && <SignUpGateModal action={gateAction} onClose={() => setGateAction(null)} />}

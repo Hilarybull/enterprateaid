@@ -27,7 +27,6 @@ import RegistrationPage from "./pages/RegistrationPage";
 import CataloguePage from "./pages/CataloguePage";
 import FinancialsPage from "./pages/FinancialsPage";
 import ProposalRequestDetailPage from "./pages/ProposalRequestDetailPage";
-import ProposalRequestsPage from "./pages/ProposalRequestsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import SharedBlueprintPage from "./pages/SharedBlueprintPage";
 import TeamPage from "./pages/TeamPage";
@@ -121,6 +120,7 @@ export default function App() {
         <Route path="registration" element={<RequireWorkspace><RegistrationPage /></RequireWorkspace>} />
         <Route path="catalogue" element={<RequireWorkspace><CataloguePage /></RequireWorkspace>} />
         <Route path="financials" element={<RequireWorkspace><FinancialsPage /></RequireWorkspace>} />
+        <Route path="proposals" element={<Navigate to="/financials?tab=proposals" replace />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="credits" element={<CreditsPage />} />
@@ -136,7 +136,7 @@ export default function App() {
         }
       />
       <Route path="/marketplace" element={<MarketplacePage />} />
-      <Route path="/marketplace/requests" element={<ProposalRequestsPage />} />
+      <Route path="/marketplace/requests" element={<Navigate to="/marketplace?tab=requests" replace />} />
       <Route path="/marketplace/request/:requestId" element={<ProposalRequestDetailPage />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

@@ -53,6 +53,7 @@ export default function BusinessPlanPage() {
   const [plan, setPlan] = useState(null);
   const [versions, setVersions] = useState([]);
   const [performance, setPerformance] = useState(null);
+  const [assumptions, setAssumptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -87,6 +88,15 @@ export default function BusinessPlanPage() {
   const narrativeHtml = useMemo(() => markdownToHtml(String(plan?.narrative_markdown || "")), [plan?.narrative_markdown]);
   const planTitle = plan?.business_name || plan?.company_name || workspaceName || "Business Plan";
   const summary = performance?.summary || {};
+
+  const aMap = useMemo(() => {
+    const map = {};
+    for (const a of assumptions) {
+      try { map[a.metric_code] = JSON.parse(a.assumption_value_json); }
+      catch { map[a.metric_code] = a.assumption_value_json; }
+    }
+    return map;
+  }, [assumptions]);
   const kpis = Array.isArray(performance?.kpis) ? performance.kpis : [];
   const variances = Array.isArray(performance?.variances) ? performance.variances : [];
   const alerts = Array.isArray(performance?.alerts) ? performance.alerts : [];
@@ -108,17 +118,20 @@ export default function BusinessPlanPage() {
       } else {
         setVersions([]);
         setPerformance(null);
+        setAssumptions([]);
         setPlanMissing(true);
         return;
       }
       setVersions(Array.isArray(detail?.versions) ? detail.versions : []);
       setPerformance(detail?.performance || null);
+      setAssumptions(Array.isArray(detail?.assumptions) ? detail.assumptions : []);
     } catch (err) {
       const message = String(err?.message || "");
       if (message.includes("HTTP 404")) {
         setPlan(null);
         setVersions([]);
         setPerformance(null);
+        setAssumptions([]);
         setPlanMissing(true);
       } else {
         if (message.includes("FEATURE_NOT_ENTITLED")) {
@@ -270,6 +283,7 @@ export default function BusinessPlanPage() {
       }
       setPreviewData(null);
       setAdoptResult(res);
+      setAssumptions(Array.isArray(res?.plan?.assumptions) ? res.plan.assumptions : assumptions);
     } catch (err) {
       setError(String(err?.message || "").replace(/^HTTP \d+:\s*/, "") || "Adoption failed. Please try again.");
     } finally {
@@ -309,9 +323,9 @@ export default function BusinessPlanPage() {
 
         <SectionCard
           title="Choose a plan"
-          subtitle={import.meta.env.VITE_ENABLE_LIVE_PLAN ? "Generate the standard business plan first, or open the live business plan for ongoing tracking." : "Generate the standard business plan from your blueprint inputs."}
+          subtitle="Generate the standard business plan first, or open the live business plan for ongoing tracking."
         >
-          <div className={`grid grid-cols-1 gap-3 ${import.meta.env.VITE_ENABLE_LIVE_PLAN ? "lg:grid-cols-2" : ""}`}>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="text-sm font-semibold text-slate-900">Generate business plan</div>
               <div className="mt-1 text-xs leading-6 text-slate-600">
@@ -327,7 +341,6 @@ export default function BusinessPlanPage() {
               </div>
             </div>
 
-            {import.meta.env.VITE_ENABLE_LIVE_PLAN && (
             <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
               <div className="text-sm font-semibold text-slate-900">Live business plan</div>
               <div className="mt-1 text-xs leading-6 text-slate-600">
@@ -343,7 +356,6 @@ export default function BusinessPlanPage() {
                 </button>
               </div>
             </div>
-            )}
           </div>
         </SectionCard>
 
@@ -425,12 +437,21 @@ export default function BusinessPlanPage() {
                     <div className="rounded-xl border border-amber-100 bg-white p-3 space-y-1">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 mb-2">Business</div>
                       <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-                        {[["Business name", previewData.extracted?.business_name], ["Industry", previewData.extracted?.industry], ["Target market", previewData.extracted?.target_market], ["Pricing model", previewData.extracted?.pricing_model]].filter(([, v]) => v).map(([label, val]) => (
-                          <div key={label} className="text-xs"><span className="font-medium text-slate-600">{label}:</span> <span className="text-slate-700">{String(val)}</span></div>
+                        {[
+                          ["Business name", previewData.extracted?.business_name],
+                          ["Industry", previewData.extracted?.industry],
+                          ["Location", previewData.extracted?.location || previewData.extracted?.geography || previewData.extracted?.market_geography],
+                          ["Target market", previewData.extracted?.target_market],
+                          ["Pricing model", previewData.extracted?.pricing_model],
+                        ].filter(([, v]) => v).map(([label, val]) => (
+                          <div key={label} className="text-xs"><span className="font-semibold text-slate-700">{label}</span><span className="text-slate-400 mx-0.5">:</span> <span className="text-slate-600">{String(val)}</span></div>
                         ))}
                       </div>
-                      {previewData.extracted?.unique_value_proposition && (
-                        <div className="mt-1 text-xs text-slate-600 italic">&ldquo;{previewData.extracted.unique_value_proposition}&rdquo;</div>
+                      {(previewData.extracted?.unique_value_proposition || previewData.extracted?.description || previewData.extracted?.business_description) && (
+                        <div
+                          className="mt-2 text-xs text-slate-600 prose prose-xs max-w-none [&_strong]:font-semibold [&_ul]:pl-4 [&_ul]:list-disc [&_li]:mt-0.5"
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(previewData.extracted.unique_value_proposition || previewData.extracted.description || previewData.extracted.business_description) }}
+                        />
                       )}
                     </div>
                   )}
@@ -470,7 +491,7 @@ export default function BusinessPlanPage() {
                         {previewData.extracted.products_services.map((p, i) => {
                           const name = typeof p === "string" ? p : p?.name || p;
                           const desc = typeof p === "object" ? p?.description : null;
-                          const price = typeof p === "object" ? p?.price : null;
+                          const price = typeof p === "object" ? (p?.price_label || (p?.unit_price != null ? `£${p.unit_price}` : null) || p?.price) : null;
                           return (
                             <div key={i} className="flex items-start justify-between gap-2 text-xs">
                               <div>
@@ -482,6 +503,30 @@ export default function BusinessPlanPage() {
                           );
                         })}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Key assumptions */}
+                  {Array.isArray(previewData.extracted?.key_assumptions) && previewData.extracted.key_assumptions.length > 0 && (
+                    <div className="rounded-xl border border-amber-100 bg-white p-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 mb-1.5">Key Assumptions</div>
+                      <ul className="space-y-0.5 pl-3 list-disc text-xs text-slate-700 marker:text-amber-400">
+                        {previewData.extracted.key_assumptions.map((a, i) => (
+                          <li key={i} dangerouslySetInnerHTML={{ __html: markdownToHtml(a) }} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Main risks */}
+                  {Array.isArray(previewData.extracted?.main_risks) && previewData.extracted.main_risks.length > 0 && (
+                    <div className="rounded-xl border border-amber-100 bg-white p-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-600 mb-1.5">Main Risks</div>
+                      <ul className="space-y-0.5 pl-3 list-disc text-xs text-slate-700 marker:text-rose-400">
+                        {previewData.extracted.main_risks.map((r, i) => (
+                          <li key={i} dangerouslySetInnerHTML={{ __html: markdownToHtml(r) }} />
+                        ))}
+                      </ul>
                     </div>
                   )}
 
@@ -501,33 +546,121 @@ export default function BusinessPlanPage() {
                 </div>
               )}
 
-              {plan && !previewData && !adoptResult && narrativeHtml && (
-                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-                  <div className="px-5 py-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">{planTitle}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{plan?.industry || plan?.target_market || "Adopted plan"}</div>
+              {/* Live plan dashboard — shown when assumptions exist */}
+              {plan && !previewData && assumptions.length > 0 && (
+                <div className="space-y-3">
+                  {/* Business Identity */}
+                  {(aMap.business_name || aMap.industry || aMap.location || aMap.target_market) && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Business Profile</div>
+                        <Pill tone="emerald">Active</Pill>
+                      </div>
+                      <div className="grid grid-cols-1 gap-y-1.5 sm:grid-cols-2">
+                        {[
+                          ["Name", aMap.business_name],
+                          ["Industry", aMap.industry],
+                          ["Location", aMap.location],
+                          ["Target market", aMap.target_market],
+                          ["Pricing model", aMap.pricing_model],
+                        ].filter(([, v]) => v).map(([label, val]) => (
+                          <div key={label} className="text-xs">
+                            <span className="font-semibold text-slate-500">{label}: </span>
+                            <span className="text-slate-800">{String(val)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {(aMap.description || aMap.unique_value_proposition) && (
+                        <div
+                          className="mt-3 text-xs text-slate-600 leading-relaxed prose prose-xs max-w-none [&_strong]:font-semibold [&_ul]:pl-4 [&_ul]:list-disc [&_li]:mt-0.5"
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(String(aMap.description || aMap.unique_value_proposition || "")) }}
+                        />
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowNarrative(v => !v)}
-                        className="text-[11px] font-medium text-brand-600 hover:text-brand-700"
-                      >
-                        {showNarrative ? "Hide" : "View plan"}
-                      </button>
-                      <Pill tone="emerald">Active</Pill>
+                  )}
+
+                  {/* Financial Plan */}
+                  {(aMap.monthly_revenue_target != null || aMap.monthly_costs != null || aMap.gross_margin_pct != null) && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-indigo-600">Financial Plan</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {aMap.monthly_revenue_target != null && (
+                          <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-center">
+                            <div className="text-[10px] font-semibold text-emerald-600">Revenue / mo</div>
+                            <div className="mt-0.5 text-sm font-bold text-emerald-800">£{Number(aMap.monthly_revenue_target).toLocaleString()}</div>
+                          </div>
+                        )}
+                        {aMap.monthly_costs != null && (
+                          <div className="rounded-xl bg-rose-50 border border-rose-100 px-3 py-2.5 text-center">
+                            <div className="text-[10px] font-semibold text-rose-600">Costs / mo</div>
+                            <div className="mt-0.5 text-sm font-bold text-rose-800">£{Number(aMap.monthly_costs).toLocaleString()}</div>
+                          </div>
+                        )}
+                        {aMap.gross_margin_pct != null && (
+                          <div className="rounded-xl bg-indigo-50 border border-indigo-100 px-3 py-2.5 text-center">
+                            <div className="text-[10px] font-semibold text-indigo-600">Gross margin</div>
+                            <div className="mt-0.5 text-sm font-bold text-indigo-800">{aMap.gross_margin_pct}%</div>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  {showNarrative && (
-                    <div
-                      className="border-t border-slate-100 px-5 py-4 max-h-[420px] overflow-y-auto text-[13px] leading-relaxed text-slate-700 [&_h1]:text-base [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-0.5 [&_p]:mb-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:mb-2 [&_li]:mb-0.5 [&_strong]:font-semibold"
-                      dangerouslySetInnerHTML={{ __html: narrativeHtml }}
-                    />
+                  )}
+
+                  {/* Products */}
+                  {Array.isArray(aMap.products_services) && aMap.products_services.length > 0 && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Products &amp; Services</div>
+                        <Link to="/catalogue" className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700">View catalogue →</Link>
+                      </div>
+                      <div className="space-y-1.5">
+                        {aMap.products_services.map((p, i) => {
+                          const name = typeof p === "string" ? p : (p?.name || "");
+                          const desc = typeof p === "object" ? (p?.description || null) : null;
+                          const price = typeof p === "object"
+                            ? (p?.price_label || (p?.unit_price != null ? `£${p.unit_price}` : null) || (p?.base_price != null ? `£${p.base_price}` : null) || p?.price || null)
+                            : null;
+                          return (
+                            <div key={i} className="flex items-start justify-between gap-2 text-xs">
+                              <div>
+                                <span className="font-medium text-slate-800">{String(name)}</span>
+                                {desc && <span className="ml-1 text-slate-500">— {String(desc)}</span>}
+                              </div>
+                              {price && <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{String(price)}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Key Assumptions */}
+                  {Array.isArray(aMap.key_assumptions) && aMap.key_assumptions.length > 0 && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-600">Key Assumptions</div>
+                      <ul className="space-y-1 pl-3 list-disc text-xs text-slate-700 marker:text-amber-400">
+                        {aMap.key_assumptions.map((a, i) => (
+                          <li key={i} dangerouslySetInnerHTML={{ __html: markdownToHtml(String(a)) }} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Main Risks */}
+                  {Array.isArray(aMap.main_risks) && aMap.main_risks.length > 0 && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-rose-600">Main Risks</div>
+                      <ul className="space-y-1 pl-3 list-disc text-xs text-slate-700 marker:text-rose-400">
+                        {aMap.main_risks.map((r, i) => (
+                          <li key={i} dangerouslySetInnerHTML={{ __html: markdownToHtml(String(r)) }} />
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}
-              {plan && !previewData && !adoptResult && !narrativeHtml && (
+
+              {plan && !previewData && !adoptResult && !(assumptions.length > 0) && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 flex items-center gap-3">
                   <div className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
                   <div className="text-xs text-slate-600">A plan is already active for this workspace. Adopt below to update your modules with a new plan.</div>

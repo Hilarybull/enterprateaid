@@ -16,8 +16,12 @@ export const PROPOSAL_ACTIVE_STATUSES = ACTIVE_STATUSES;
 export const PROPOSAL_TERMINAL_STATUSES = TERMINAL_STATUSES;
 
 function errText(e) {
-  const m = e instanceof Error ? e.message : String(e || "");
-  return m.replace(/^HTTP \d+:\s*/i, "") || "Something went wrong.";
+  const raw = (e instanceof Error ? e.message : String(e || "")).replace(/^HTTP \d+:\s*/i, "");
+  if (/network_error|failed to fetch|networkerror|load failed/i.test(raw)) return "Couldn't reach the server. Check your connection and try again.";
+  if (/bearer token|not authenticated|401|unauthor/i.test(raw)) return "Your session has expired — please sign in again.";
+  if (/greater than or equal to 1|less than or equal to|should be a valid/i.test(raw)) return "Some values are out of range — please check the form.";
+  if (/^\s*5\d\d\b|internal server|schema cache|does not exist|timed out/i.test(raw)) return "Something went wrong on our side. Please try again in a moment.";
+  return raw || "Something went wrong.";
 }
 
 export const useProposalStore = create((set, get) => ({
@@ -136,10 +140,11 @@ export const useProposalStore = create((set, get) => ({
   },
 
   // ── Shared: status transitions ─────────────────────────────
-  async transitionStatus(proposalId, statusValue, reason) {
+  async transitionStatus(proposalId, statusValue, reason, attachments) {
     const row = await apiRequest(`/proposals/${proposalId}/status`, "POST", {
       status: statusValue,
       reason: reason || null,
+      attachments: attachments?.length ? attachments : null,
     });
     set({
       inbox: get().inbox.map((p) => (p.id === proposalId ? { ...p, ...row } : p)),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import SectionCard from "../SectionCard";
 import SegmentedTabs from "../SegmentedTabs";
@@ -10,7 +10,8 @@ import InlineAlert from "../InlineAlert";
 import ConfirmDialog from "../ConfirmDialog";
 import { useProposalStore, PROPOSAL_ACTIVE_STATUSES } from "../../store/proposals";
 import { useWorkspaceStore } from "../../store/workspace";
-import { apiRequest } from "../../api/client";
+import { useAuthStore } from "../../store/auth";
+import { apiRequest, getApiBaseUrl } from "../../api/client";
 
 // ── Status presentation ────────────────────────────────────────────────────
 const STATUS_TONE = {
@@ -47,8 +48,145 @@ function fmtDate(v) {
 }
 
 function errText(e) {
-  const m = e instanceof Error ? e.message : String(e || "");
-  return m.replace(/^HTTP \d+:\s*/i, "") || "Something went wrong.";
+  const raw = (e instanceof Error ? e.message : String(e || "")).replace(/^HTTP \d+:\s*/i, "");
+  if (/network_error|failed to fetch|networkerror|load failed/i.test(raw)) return "Couldn't reach the server. Check your connection and try again.";
+  if (/bearer token|not authenticated|401|unauthor/i.test(raw)) return "Your session has expired — please sign in again.";
+  if (/greater than or equal to 1/i.test(raw)) return "Max submissions must be at least 1.";
+  if (/greater than or equal to|less than or equal to|should be a valid|value_error/i.test(raw)) return "Some values are out of range — please check the form.";
+  if (/^\s*(5\d\d|internal server)/i.test(raw) || /schema cache|does not exist|timed out/i.test(raw)) return "Something went wrong on our side. Please try again in a moment.";
+  return raw || "Something went wrong.";
+}
+
+// ── Kebab (3-dot) row menu ────────────────────────────────────────────────
+function RowMenu({ items, disabled }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const visible = (items || []).filter(Boolean);
+  if (!visible.length) return null;
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        aria-label="More actions"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-800"
+      >
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
+      </button>
+      {open ? (
+        <div className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          {visible.map((it, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => { setOpen(false); it.onClick(); }}
+              className={
+                "block w-full px-3 py-2 text-left text-[13px] transition hover:bg-slate-50 dark:hover:bg-slate-800 " +
+                (it.danger ? "text-rose-600 dark:text-rose-400" : "text-slate-700 dark:text-slate-200")
+              }
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Message attachment uploader ──────────────────────────────────────────
+function useUploader() {
+  const token = useAuthStore((s) => s.token);
+  const [uploading, setUploading] = useState(false);
+  async function upload(files) {
+    setUploading(true);
+    const out = [];
+    try {
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch(`${getApiBaseUrl()}/proposals/upload-attachment`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.detail || "Upload failed");
+        out.push(await res.json());
+      }
+    } finally {
+      setUploading(false);
+    }
+    return out;
+  }
+  return { upload, uploading };
+}
+
+function FileChips({ files, onRemove }) {
+  if (!files.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {files.map((f, i) => (
+        <span key={i} className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          {f.filename || `File ${i + 1}`}
+          <button type="button" className="text-slate-400 hover:text-rose-500" onClick={() => onRemove(i)}>
+            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function MsgAttachments({ items }) {
+  if (!items?.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-2">
+      {items.map((a, i) => (
+        <a key={i} href={a.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-brand-600 hover:bg-white/60 dark:border-slate-600 dark:text-brand-400">
+          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+          {a.filename || "Download"}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function ClarificationThread({ thread, recipientName, proposerName }) {
+  if (!thread.length) {
+    return <p className="py-6 text-center text-sm text-slate-500">No clarification messages yet.</p>;
+  }
+  return (
+    <ul className="space-y-2">
+      {thread.map((e, i) => {
+        const fromRecipient = e.status === "CLARIFICATION_REQUESTED";
+        return (
+          <li
+            key={i}
+            className={
+              "rounded-lg border p-2.5 text-sm " +
+              (fromRecipient
+                ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/15 dark:text-amber-200"
+                : "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300")
+            }
+          >
+            <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+              {fromRecipient ? `${recipientName || "Recipient"} asked` : `${proposerName || "Proposer"} replied`}
+              {" · "}{fmtDate(e.timestamp)}
+            </div>
+            <div className="whitespace-pre-wrap">{e.reason}</div>
+            <MsgAttachments items={e.attachments} />
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 // ── Proposal detail modal ─────────────────────────────────────────────────
@@ -60,7 +198,29 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
   const [reason, setReason] = useState("");
   const [reviseOpen, setReviseOpen] = useState(false);
   const [reviseText, setReviseText] = useState(proposal.summary || "");
+  const [clarifyOpen, setClarifyOpen] = useState(false);
+  const [clarifyText, setClarifyText] = useState("");
+  const [clarifyFiles, setClarifyFiles] = useState([]);
+  const [replyText, setReplyText] = useState("");
+  const [replyFiles, setReplyFiles] = useState([]);
+  const [clarifyViewOpen, setClarifyViewOpen] = useState(false);
   const [full, setFull] = useState(proposal);
+  const { upload, uploading } = useUploader();
+  const clarifyFileRef = useRef(null);
+  const replyFileRef = useRef(null);
+
+  async function pickFiles(e, setter) {
+    const files = [...(e.target.files || [])];
+    e.target.value = "";
+    if (!files.length) return;
+    setError(null);
+    try {
+      const metas = await upload(files);
+      setter((prev) => [...prev, ...metas]);
+    } catch (err) {
+      setError(errText(err));
+    }
+  }
 
   useEffect(() => {
     // Opening as recipient marks it viewed / returns latest server state.
@@ -75,6 +235,32 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
   const actions = role === "recipient" ? (RECIPIENT_ACTIONS[p.status] || []) : [];
   const canWithdraw = role === "proposer" && PROPOSAL_ACTIVE_STATUSES.includes(p.status);
   const canRevise = role === "proposer" && p.status === "CLARIFICATION_REQUESTED";
+
+  const clarificationNote =
+    p.clarification_note ||
+    [...(p.events || [])].reverse().find((e) => e.status === "CLARIFICATION_REQUESTED" && (e.reason || "").trim())?.reason ||
+    null;
+  const clarifyThread = (p.events || []).filter(
+    (e) => ["CLARIFICATION_REQUESTED", "REVISION_REQUESTED"].includes(e.status) && (e.reason || "").trim(),
+  );
+
+  async function requestClarification() {
+    if (!clarifyText.trim()) { setError("Write what you'd like the proposer to clarify."); return; }
+    setBusy("CLARIFICATION_REQUESTED");
+    setError(null);
+    try {
+      const row = await transitionStatus(p.id, "CLARIFICATION_REQUESTED", clarifyText.trim(), clarifyFiles);
+      setFull((prev) => ({ ...prev, ...row }));
+      setClarifyOpen(false);
+      setClarifyText("");
+      setClarifyFiles([]);
+      onChanged?.(row);
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function move(target) {
     setBusy(target);
@@ -92,13 +278,20 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
   }
 
   async function submitRevision() {
+    if (!replyText.trim()) { setError("Write a reply to the clarification request."); return; }
     setBusy("revise");
     setError(null);
     try {
-      const row = await reviseProposal(p.id, { summary: reviseText, note: reason.trim() || null });
+      const payload = { note: replyText.trim() };
+      if (replyFiles.length) payload.note_attachments = replyFiles;
+      if ((reviseText || "").trim() && reviseText.trim() !== (p.summary || "").trim()) {
+        payload.summary = reviseText.trim();
+      }
+      const row = await reviseProposal(p.id, payload);
       setFull((prev) => ({ ...prev, ...row }));
       setReviseOpen(false);
-      setReason("");
+      setReplyText("");
+      setReplyFiles([]);
       onChanged?.(row);
     } catch (e) {
       setError(errText(e));
@@ -117,6 +310,16 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
                 {p.title || p.request_title || "Proposal"}
               </h2>
               <StatusBadge status={p.status} />
+              {clarifyThread.length ? (
+                <button
+                  type="button"
+                  onClick={() => setClarifyViewOpen(true)}
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+                  Clarification · {clarifyThread.length}
+                </button>
+              ) : null}
             </div>
             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               {role === "recipient" ? `From ${p.proposer_name}` : `To ${p.recipient_name}`}
@@ -153,8 +356,18 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
               <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Requirement responses</div>
               <ul className="space-y-2">
                 {p.requirement_responses.map((r, i) => (
-                  <li key={i} className="rounded-lg border border-slate-200 p-2 text-slate-700 dark:border-slate-700 dark:text-slate-300">
-                    {r.response}
+                  <li key={i} className="rounded-lg border border-slate-200 p-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300">
+                    {r.requirement_text ? (
+                      <div className="mb-1 text-xs font-medium text-slate-500">{r.requirement_text}</div>
+                    ) : null}
+                    {r.attachment?.url ? (
+                      <a href={r.attachment.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand-600 hover:underline dark:text-brand-400">
+                        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                        {r.attachment.filename || "Download"}
+                      </a>
+                    ) : (
+                      <div className="whitespace-pre-wrap">{r.response}</div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -176,6 +389,17 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
             </div>
           ) : null}
 
+          {clarifyThread.length ? (
+            <button
+              type="button"
+              onClick={() => setClarifyViewOpen(true)}
+              className="flex w-full items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-left text-sm text-amber-800 hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/15 dark:text-amber-200"
+            >
+              <span className="font-medium">Clarification thread · {clarifyThread.length} message{clarifyThread.length === 1 ? "" : "s"}</span>
+              <span className="text-xs opacity-70">Open ›</span>
+            </button>
+          ) : null}
+
           {(p.events || []).length ? (
             <div>
               <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">History</div>
@@ -195,7 +419,83 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
         {(actions.length || canWithdraw || canRevise) ? (
           <div className="space-y-2 border-t border-slate-200 px-5 py-4 dark:border-slate-700">
             {error ? <InlineAlert kind="error" message={error} /> : null}
-            {(actions.length || reviseOpen) ? (
+
+            {/* Recipient: ask for clarification */}
+            {clarifyOpen ? (
+              <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/15">
+                <div className="text-xs font-semibold text-amber-800 dark:text-amber-200">
+                  What would you like {p.proposer_name || "the proposer"} to clarify?
+                </div>
+                <textarea
+                  rows={3}
+                  autoFocus
+                  className="ea-input"
+                  placeholder="e.g. Please break down the pricing for phase 2, and confirm the delivery timeline."
+                  value={clarifyText}
+                  onChange={(e) => setClarifyText(e.target.value)}
+                />
+                <input ref={clarifyFileRef} type="file" multiple className="hidden" onChange={(e) => pickFiles(e, setClarifyFiles)} />
+                <FileChips files={clarifyFiles} onRemove={(i) => setClarifyFiles((f) => f.filter((_, j) => j !== i))} />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={busy != null} onClick={requestClarification}>
+                    {busy === "CLARIFICATION_REQUESTED" ? <Spinner size={14} /> : "Send request"}
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={uploading} onClick={() => clarifyFileRef.current?.click()}>
+                    {uploading ? <Spinner size={14} /> : "Attach files"}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => { setClarifyOpen(false); setClarifyText(""); setClarifyFiles([]); setError(null); }}>Cancel</Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Proposer: reply to the clarification + optionally revise */}
+            {reviseOpen ? (
+              <div className="space-y-2 rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                {clarificationNote ? (
+                  <div className="rounded-lg bg-amber-50 p-2.5 text-sm text-amber-900 dark:bg-amber-900/15 dark:text-amber-200">
+                    <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                      {p.recipient_name || "Recipient"} asked
+                    </div>
+                    <div className="whitespace-pre-wrap">{clarificationNote}</div>
+                  </div>
+                ) : null}
+                <div>
+                  <div className="ea-label">Your reply</div>
+                  <textarea
+                    rows={3}
+                    autoFocus
+                    className="ea-input"
+                    placeholder="Answer their questions here."
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div className="ea-label">Update your cover letter (optional)</div>
+                  <textarea
+                    rows={4}
+                    className="ea-input"
+                    placeholder="Leave unchanged to keep your original cover letter."
+                    value={reviseText}
+                    onChange={(e) => setReviseText(e.target.value)}
+                  />
+                </div>
+                <input ref={replyFileRef} type="file" multiple className="hidden" onChange={(e) => pickFiles(e, setReplyFiles)} />
+                <FileChips files={replyFiles} onRemove={(i) => setReplyFiles((f) => f.filter((_, j) => j !== i))} />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={busy != null} onClick={submitRevision}>
+                    {busy === "revise" ? <Spinner size={14} /> : "Send reply & revision"}
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={uploading} onClick={() => replyFileRef.current?.click()}>
+                    {uploading ? <Spinner size={14} /> : "Attach files"}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => { setReviseOpen(false); setReplyFiles([]); setError(null); }}>Cancel</Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Recipient: generic optional note for the other transitions */}
+            {actions.length && !clarifyOpen ? (
               <input
                 className="ea-input"
                 placeholder="Optional note to the other party"
@@ -203,47 +503,59 @@ function ProposalDetail({ proposal, role, onClose, onChanged }) {
                 onChange={(e) => setReason(e.target.value)}
               />
             ) : null}
-            {reviseOpen ? (
-              <textarea
-                rows={4}
-                className="ea-input"
-                placeholder="Updated cover letter / clarification"
-                value={reviseText}
-                onChange={(e) => setReviseText(e.target.value)}
-              />
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              {actions.map(([target, text]) => (
-                <Button
-                  key={target}
-                  size="sm"
-                  variant={target === "DECLINED" ? "danger" : "primary"}
-                  disabled={busy != null}
-                  onClick={() => move(target)}
-                >
-                  {busy === target ? <Spinner size={14} /> : text}
-                </Button>
-              ))}
-              {canRevise && !reviseOpen ? (
-                <Button size="sm" onClick={() => setReviseOpen(true)}>Submit revision</Button>
-              ) : null}
-              {reviseOpen ? (
-                <>
-                  <Button size="sm" disabled={busy != null} onClick={submitRevision}>
-                    {busy === "revise" ? <Spinner size={14} /> : "Send revision"}
+
+            {!clarifyOpen && !reviseOpen ? (
+              <div className="flex flex-wrap gap-2">
+                {actions.map(([target, text]) => (
+                  <Button
+                    key={target}
+                    size="sm"
+                    variant={target === "DECLINED" ? "danger" : "primary"}
+                    disabled={busy != null}
+                    onClick={() => (target === "CLARIFICATION_REQUESTED" ? (setError(null), setClarifyOpen(true)) : move(target))}
+                  >
+                    {busy === target ? <Spinner size={14} /> : text}
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={() => setReviseOpen(false)}>Cancel</Button>
-                </>
-              ) : null}
-              {canWithdraw ? (
-                <Button size="sm" variant="secondary" disabled={busy != null} onClick={() => move("WITHDRAWN")}>
-                  {busy === "WITHDRAWN" ? <Spinner size={14} /> : "Withdraw"}
-                </Button>
-              ) : null}
-            </div>
+                ))}
+                {canRevise ? (
+                  <Button size="sm" onClick={() => { setError(null); setReviseText(p.summary || ""); setReviseOpen(true); }}>
+                    Respond & submit revision
+                  </Button>
+                ) : null}
+                {canWithdraw ? (
+                  <Button size="sm" variant="secondary" disabled={busy != null} onClick={() => move("WITHDRAWN")}>
+                    {busy === "WITHDRAWN" ? <Spinner size={14} /> : "Withdraw"}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
+
+      {clarifyViewOpen ? (
+        <div
+          className="fixed inset-0 z-[135] flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-4"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setClarifyViewOpen(false); }}
+        >
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl dark:bg-slate-900 sm:rounded-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5 dark:border-slate-700">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Clarification</h3>
+                <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                  {p.title || p.request_title || "Proposal"} · {role === "recipient" ? p.proposer_name : p.recipient_name}
+                </p>
+              </div>
+              <button type="button" onClick={() => setClarifyViewOpen(false)} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <ClarificationThread thread={clarifyThread} recipientName={p.recipient_name} proposerName={p.proposer_name} />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -259,14 +571,18 @@ function InboxTab() {
 
   useEffect(() => { fetchInbox(); fetchRequests(); }, []); // eslint-disable-line
 
-  if (inboxLoading) return <div className="flex justify-center py-10"><Spinner size={22} /></div>;
-  if (inboxError) return <InlineAlert kind="error" message={inboxError} />;
-  if (!inbox.length) {
-    return <p className="py-8 text-center text-sm text-slate-500">No proposals received yet. Publish a request to attract submissions.</p>;
-  }
+  // Only the first load blanks the tab. Background refetches (e.g. after
+  // opening a proposal marks it viewed) must not unmount the open detail
+  // modal — that caused an open→refetch→remount→refetch blink loop.
+  if (inboxLoading && !inbox.length) return <div className="flex justify-center py-10"><Spinner size={22} /></div>;
+  if (inboxError && !inbox.length) return <InlineAlert kind="error" message={inboxError} />;
 
   return (
     <div className="space-y-2">
+      {inboxError ? <InlineAlert kind="error" message={inboxError} /> : null}
+      {!inbox.length && !inboxLoading ? (
+        <p className="py-8 text-center text-sm text-slate-500">No proposals received yet. Publish a request to attract submissions.</p>
+      ) : null}
       {inbox.map((p) => (
         <div key={p.id} className="ea-card p-3 sm:p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -344,19 +660,19 @@ function ActivityTab() {
 
   useEffect(() => { fetchActivity(); }, []); // eslint-disable-line
 
-  if (activityLoading) return <div className="flex justify-center py-10"><Spinner size={22} /></div>;
-  if (activityError) return <InlineAlert kind="error" message={activityError} />;
-  if (!activity.length) {
-    return (
-      <p className="py-8 text-center text-sm text-slate-500">
-        You haven't submitted any proposals yet.{" "}
-        <Link to="/marketplace/requests" className="text-brand-600 hover:underline dark:text-brand-400">Browse open requests</Link>.
-      </p>
-    );
-  }
+  // Background refetches must not unmount an open detail modal (blink loop).
+  if (activityLoading && !activity.length) return <div className="flex justify-center py-10"><Spinner size={22} /></div>;
+  if (activityError && !activity.length) return <InlineAlert kind="error" message={activityError} />;
 
   return (
     <div className="space-y-2">
+      {activityError ? <InlineAlert kind="error" message={activityError} /> : null}
+      {!activity.length && !activityLoading ? (
+        <p className="py-8 text-center text-sm text-slate-500">
+          You haven't submitted any proposals yet.{" "}
+          <Link to="/marketplace?tab=requests" className="text-brand-600 hover:underline dark:text-brand-400">Browse open requests</Link>.
+        </p>
+      ) : null}
       {activity.map((p) => (
         <button key={p.id} type="button" className="ea-card block w-full p-3 text-left sm:p-4" onClick={() => setOpen(p)}>
           <div className="flex flex-wrap items-center gap-2">
@@ -389,6 +705,7 @@ function RequestForm({ initial, onSaved, onCancel }) {
   const [form, setForm] = useState(() => ({ ...EMPTY_REQUEST, ...(initial || {}), requirements: (initial?.requirements || []).map((r) => ({ ...r })) }));
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState(null);
   const [error, setError] = useState(null);
   const editing = !!initial?.id;
 
@@ -397,14 +714,35 @@ function RequestForm({ initial, onSaved, onCancel }) {
   async function generateDescription() {
     if (!form.title.trim()) { setError("Add a title first."); return; }
     setAiBusy(true);
+    setAiNote(null);
     try {
       const { description } = await apiRequest("/proposals/generate-description", "POST", { title: form.title.trim() });
-      if (description) set({ description });
-    } catch { /* non-blocking */ } finally { setAiBusy(false); }
+      if (description && description.trim()) {
+        set({ description });
+      } else {
+        setAiNote("Couldn't generate a description right now — write one below.");
+      }
+    } catch {
+      setAiNote("Couldn't generate a description right now — write one below.");
+    } finally {
+      setAiBusy(false);
+    }
   }
 
   async function save() {
-    if (!form.title.trim()) { setError("A title is required."); return; }
+    if (!form.title.trim()) { setError("Give the request a title."); return; }
+    const cap = form.submission_cap ? Number(form.submission_cap) : null;
+    if (cap !== null && (!Number.isFinite(cap) || cap < 1)) {
+      setError("Max submissions must be a whole number of 1 or more.");
+      return;
+    }
+    if (form.deadline) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      if (new Date(form.deadline) < today) {
+        setError("The closing date is in the past. Pick today or a future date.");
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
     const payload = {
@@ -415,10 +753,11 @@ function RequestForm({ initial, onSaved, onCancel }) {
       budget_currency: form.budget_currency || null,
       budget_visible: !!form.budget_visible,
       deadline: form.deadline || null,
-      submission_cap: form.submission_cap ? Number(form.submission_cap) : null,
+      submission_cap: cap,
       visibility: form.visibility,
       requirements: (form.requirements || []).filter((r) => (r.text || "").trim()).map((r) => ({
         id: r.id, text: r.text.trim(), mandatory: !!r.mandatory, weight: Number(r.weight) || 1,
+        response_type: r.response_type || "text",
       })),
     };
     try {
@@ -434,7 +773,6 @@ function RequestForm({ initial, onSaved, onCancel }) {
   return (
     <SectionCard title={editing ? "Edit request" : "New proposal request"}>
       <div className="space-y-3">
-        {error ? <InlineAlert kind="error" message={error} /> : null}
         <div>
           <div className="ea-label">Title</div>
           <Input value={form.title} onChange={(e) => set({ title: e.target.value })} placeholder="e.g. Brand refresh for a fintech startup" />
@@ -447,6 +785,7 @@ function RequestForm({ initial, onSaved, onCancel }) {
             </button>
           </div>
           <textarea rows={4} className="ea-input" value={form.description} onChange={(e) => set({ description: e.target.value })} placeholder="What you need, context, and how proposals will be judged." />
+          {aiNote ? <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">{aiNote}</div> : null}
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
@@ -457,15 +796,24 @@ function RequestForm({ initial, onSaved, onCancel }) {
           </div>
           <div>
             <div className="ea-label">Deadline</div>
-            <Input type="date" value={form.deadline || ""} onChange={(e) => set({ deadline: e.target.value })} />
+            <Input type="date" min={new Date().toISOString().slice(0, 10)} value={form.deadline || ""} onChange={(e) => set({ deadline: e.target.value })} />
           </div>
           <div>
             <div className="ea-label">Budget (optional)</div>
-            <Input value={form.budget_range} onChange={(e) => set({ budget_range: e.target.value })} placeholder="e.g. £10k–£20k" />
+            <div className="flex gap-2">
+              <select
+                className="ea-input w-[92px] shrink-0"
+                value={form.budget_currency || "GBP"}
+                onChange={(e) => set({ budget_currency: e.target.value })}
+              >
+                {["GBP", "USD", "EUR", "NGN", "CAD", "AUD"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <Input value={form.budget_range} onChange={(e) => set({ budget_range: e.target.value })} placeholder="e.g. 10k–20k" />
+            </div>
           </div>
           <div>
             <div className="ea-label">Max submissions (optional)</div>
-            <Input type="number" min="1" value={form.submission_cap} onChange={(e) => set({ submission_cap: e.target.value })} />
+            <Input type="number" min="1" step="1" value={form.submission_cap} onChange={(e) => { const v = e.target.value; set({ submission_cap: v === "" ? "" : String(Math.max(1, Math.floor(Number(v) || 1))) }); }} />
           </div>
         </div>
         <div className="flex flex-wrap gap-4 text-sm">
@@ -481,30 +829,63 @@ function RequestForm({ initial, onSaved, onCancel }) {
 
         <div>
           <div className="ea-label">Requirements</div>
+          <p className="mb-2 text-[11px] text-slate-400">Set what each item asks for. Proposers can't submit until every <span className="font-medium">Required</span> item is provided in the format you choose.</p>
           <div className="space-y-2">
-            {(form.requirements || []).map((r, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <input
-                  className="ea-input flex-1"
-                  value={r.text}
-                  onChange={(e) => set({ requirements: form.requirements.map((x, j) => j === i ? { ...x, text: e.target.value } : x) })}
-                  placeholder="e.g. Minimum 3 years in B2B SaaS"
-                />
-                <label className="flex items-center gap-1 text-xs text-slate-500">
-                  <input type="checkbox" checked={!!r.mandatory} onChange={(e) => set({ requirements: form.requirements.map((x, j) => j === i ? { ...x, mandatory: e.target.checked } : x) })} />
-                  Required
-                </label>
-                <button type="button" className="text-slate-400 hover:text-rose-500" onClick={() => set({ requirements: form.requirements.filter((_, j) => j !== i) })}>
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
-              </div>
-            ))}
-            <Button size="sm" variant="secondary" onClick={() => set({ requirements: [...(form.requirements || []), { text: "", mandatory: false, weight: 1 }] })}>
+            {(form.requirements || []).map((r, i) => {
+              const upd = (patch) => set({ requirements: form.requirements.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+              return (
+                <div key={i} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                  <div className="flex items-start gap-2">
+                    <input
+                      className="ea-input flex-1"
+                      value={r.text}
+                      onChange={(e) => upd({ text: e.target.value })}
+                      placeholder="e.g. Minimum 3 years in B2B SaaS · Portfolio of past work · Fixed quote"
+                    />
+                    <button type="button" className="mt-2 shrink-0 text-slate-400 hover:text-rose-500" onClick={() => set({ requirements: form.requirements.filter((_, j) => j !== i) })}>
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-400">
+                    <label className="flex items-center gap-1.5">
+                      Answer as
+                      <select
+                        className="ea-input h-8 w-auto py-0 text-xs"
+                        value={r.response_type || "text"}
+                        onChange={(e) => upd({ response_type: e.target.value })}
+                      >
+                        <option value="text">Short text</option>
+                        <option value="paragraph">Paragraph</option>
+                        <option value="link">Link / URL</option>
+                        <option value="number">Number</option>
+                        <option value="file">File upload</option>
+                        <option value="image">Image upload</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5" title="Scoring weight used when evaluating proposals">
+                      Weight
+                      <input
+                        type="number" min="1" max="10"
+                        className="ea-input h-8 w-14 px-2 py-0"
+                        value={r.weight ?? 1}
+                        onChange={(e) => upd({ weight: e.target.value })}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={!!r.mandatory} onChange={(e) => upd({ mandatory: e.target.checked })} />
+                      Required
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+            <Button size="sm" variant="secondary" onClick={() => set({ requirements: [...(form.requirements || []), { text: "", mandatory: false, weight: 1, response_type: "text" }] })}>
               Add requirement
             </Button>
           </div>
         </div>
 
+        {error ? <InlineAlert kind="error" message={error} /> : null}
         <div className="flex gap-2 pt-1">
           <Button onClick={save} disabled={busy}>{busy ? <Spinner size={14} /> : editing ? "Save changes" : "Create request"}</Button>
           <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -515,7 +896,7 @@ function RequestForm({ initial, onSaved, onCancel }) {
 }
 
 // ── Requests tab ──────────────────────────────────────────────────────────
-function RequestsTab() {
+function RequestsTab({ openNewNonce = 0 }) {
   const { requests, requestsLoading, requestsError, fetchRequests, requestAction, deleteRequest, inviteToRequest } = useProposalStore();
   const [editing, setEditing] = useState(null); // request obj or "new" or null
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -523,32 +904,30 @@ function RequestsTab() {
   const [inviteEmails, setInviteEmails] = useState("");
   const [inviteResult, setInviteResult] = useState(null);
   const [rowError, setRowError] = useState(null);
+  const [busyRow, setBusyRow] = useState(null); // { id, action }
+  const [copiedId, setCopiedId] = useState(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
   useEffect(() => { fetchRequests(); }, []); // eslint-disable-line
+  useEffect(() => { if (openNewNonce > 0) setEditing("new"); }, [openNewNonce]);
 
   async function act(id, action) {
     setRowError(null);
+    setBusyRow({ id, action });
     try { await requestAction(id, action); }
     catch (e) { setRowError(errText(e)); }
+    finally { setBusyRow(null); }
   }
 
-  if (editing) {
-    return (
-      <RequestForm
-        initial={editing === "new" ? null : editing}
-        onSaved={() => setEditing(null)}
-        onCancel={() => setEditing(null)}
-      />
-    );
+  function copyLink(id) {
+    navigator.clipboard?.writeText(`${origin}/marketplace/request/${id}`).catch(() => {});
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1600);
   }
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-between">
-        <p className="text-sm text-slate-500">Publish a brief and receive structured proposals.</p>
-        <Button size="sm" onClick={() => setEditing("new")}>New request</Button>
-      </div>
+      <p className="text-sm text-slate-500">Publish a brief and receive structured proposals.</p>
       {rowError ? <InlineAlert kind="error" message={rowError} /> : null}
       {requestsError ? <InlineAlert kind="error" message={requestsError} /> : null}
       {requestsLoading ? (
@@ -556,46 +935,71 @@ function RequestsTab() {
       ) : !requests.length ? (
         <p className="py-8 text-center text-sm text-slate-500">No requests yet.</p>
       ) : (
-        requests.map((r) => (
-          <div key={r.id} className="ea-card p-3 sm:p-4">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-slate-900 dark:text-slate-100">{r.title}</span>
-                  <Badge tone={r.status === "PUBLISHED" ? "success" : r.status === "CLOSED" ? "slate" : "warn"}>{label(r.status)}</Badge>
-                  {r.visibility === "private" ? <Badge tone="slate">Invite-only</Badge> : null}
-                </div>
-                <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  {r.submission_count} submission{r.submission_count === 1 ? "" : "s"}
-                  {r.deadline ? ` · closes ${fmtDate(r.deadline)}` : ""}
-                  {r.submission_cap ? ` · cap ${r.submission_cap}` : ""}
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-1.5">
-                {r.status === "DRAFT" ? (
-                  <>
-                    <Button size="sm" variant="ghost" onClick={() => setEditing(r)}>Edit</Button>
-                    <Button size="sm" onClick={() => act(r.id, "publish")}>Publish</Button>
-                  </>
-                ) : null}
-                {r.status === "PUBLISHED" ? (
-                  <>
-                    <Button size="sm" variant="ghost" onClick={() => { navigator.clipboard?.writeText(`${origin}/marketplace/request/${r.id}`); }}>Copy link</Button>
-                    <Button size="sm" variant="ghost" onClick={() => { setInviteFor(r); setInviteEmails(""); setInviteResult(null); }}>Invite</Button>
-                    <Button size="sm" variant="secondary" onClick={() => act(r.id, "close")}>Close</Button>
-                  </>
-                ) : null}
-                {r.status === "CLOSED" ? (
-                  <Button size="sm" onClick={() => act(r.id, "reopen")}>Reopen</Button>
-                ) : null}
-                {r.status !== "PUBLISHED" ? (
-                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(r)}>Delete</Button>
-                ) : null}
+        requests.map((r) => {
+          const openPublic = () => window.open(`/marketplace/request/${r.id}`, "_blank", "noopener");
+          return (
+            <div key={r.id} className="ea-card p-3 sm:p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <button type="button" onClick={openPublic} className="min-w-0 text-left">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-900 hover:text-brand-700 dark:text-slate-100">{r.title}</span>
+                    <Badge tone={r.status === "PUBLISHED" ? "success" : r.status === "CLOSED" ? "slate" : "warn"}>{label(r.status)}</Badge>
+                    {r.visibility === "private" ? <Badge tone="slate">Invite-only</Badge> : null}
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    {r.submission_count} submission{r.submission_count === 1 ? "" : "s"}
+                    {r.deadline ? ` · closes ${fmtDate(r.deadline)}` : ""}
+                    {r.submission_cap ? ` · cap ${r.submission_cap}` : ""}
+                  </div>
+                </button>
+                {(() => {
+                  const rowBusy = busyRow?.id === r.id;
+                  const items = [
+                    { label: "View public page", onClick: openPublic },
+                    { label: "Edit request", onClick: () => setEditing(r) },
+                    r.status === "DRAFT" && { label: "Publish", onClick: () => act(r.id, "publish") },
+                    r.status === "PUBLISHED" && { label: "Copy link", onClick: () => copyLink(r.id) },
+                    r.status === "PUBLISHED" && { label: "Invite proposers", onClick: () => { setInviteFor(r); setInviteEmails(""); setInviteResult(null); } },
+                    r.status === "PUBLISHED" && { label: "Close request", onClick: () => act(r.id, "close") },
+                    r.status === "CLOSED" && { label: "Reopen", onClick: () => act(r.id, "reopen") },
+                    r.status !== "PUBLISHED" && { label: "Delete", onClick: () => setConfirmDelete(r), danger: true },
+                  ];
+                  return (
+                    <div className="flex shrink-0 items-center gap-2">
+                      {rowBusy ? <Spinner size={14} /> : null}
+                      {r.status === "DRAFT" ? (
+                        <Button size="sm" disabled={rowBusy} onClick={() => act(r.id, "publish")}>Publish</Button>
+                      ) : null}
+                      <RowMenu items={items} disabled={rowBusy} />
+                    </div>
+                  );
+                })()}
               </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
+
+      {copiedId ? (
+        <div className="fixed bottom-5 left-1/2 z-[140] -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white shadow-lg dark:bg-slate-700">
+          Link copied to clipboard
+        </div>
+      ) : null}
+
+      {editing ? (
+        <div
+          className="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-slate-950/50 p-0 sm:p-4"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
+        >
+          <div className="w-full max-w-2xl sm:my-6">
+            <RequestForm
+              initial={editing === "new" ? null : editing}
+              onSaved={() => setEditing(null)}
+              onCancel={() => setEditing(null)}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {inviteFor ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setInviteFor(null); }}>
@@ -633,7 +1037,12 @@ function RequestsTab() {
           message="Permanently delete this request? Submissions already received are kept."
           confirmLabel="Delete"
           danger
-          onConfirm={async () => { await deleteRequest(confirmDelete.id); setConfirmDelete(null); }}
+          onConfirm={() => {
+            const id = confirmDelete.id;
+            setConfirmDelete(null); // close immediately — deleteRequest is optimistic
+            setRowError(null);
+            deleteRequest(id).catch((e) => setRowError(errText(e)));
+          }}
           onCancel={() => setConfirmDelete(null)}
         />
       ) : null}
@@ -728,7 +1137,8 @@ function SettingsTab() {
 
 // ── Panel (rendered as a tab inside Financials) ───────────────────────────
 export default function ProposalsPanel() {
-  const [tab, setTab] = useState("inbox");
+  const [tab, setTab] = useState("requests");
+  const [newReqNonce, setNewReqNonce] = useState(0);
   const inboxUnread = useProposalStore((s) => s.inboxUnread);
   const fetchInbox = useProposalStore((s) => s.fetchInbox);
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
@@ -736,22 +1146,27 @@ export default function ProposalsPanel() {
   useEffect(() => { fetchInbox(); }, [workspaceId]); // eslint-disable-line
 
   const options = useMemo(() => ([
+    { value: "requests", label: "Requests" },
     { value: "inbox", label: inboxUnread ? `Inbox (${inboxUnread})` : "Inbox" },
     { value: "activity", label: "Activity" },
-    { value: "requests", label: "Requests" },
     { value: "settings", label: "Settings" },
   ]), [inboxUnread]);
+
+  const startNewRequest = () => { setTab("requests"); setNewReqNonce((n) => n + 1); };
 
   return (
     <div>
       <p className="mb-3 text-sm text-slate-500 dark:text-slate-400">
         Receive structured proposals for your requests, and submit proposals to other businesses.
       </p>
-      <div className="max-w-md"><SegmentedTabs value={tab} onChange={setTab} options={options} size="sm" /></div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="max-w-md flex-1"><SegmentedTabs value={tab} onChange={setTab} options={options} size="sm" /></div>
+        <Button size="sm" onClick={startNewRequest}>New request</Button>
+      </div>
       <div className="mt-4">
+        {tab === "requests" ? <RequestsTab openNewNonce={newReqNonce} /> : null}
         {tab === "inbox" ? <InboxTab /> : null}
         {tab === "activity" ? <ActivityTab /> : null}
-        {tab === "requests" ? <RequestsTab /> : null}
         {tab === "settings" ? <SettingsTab /> : null}
       </div>
     </div>

@@ -150,6 +150,7 @@ async def get_proposal(proposal_id: str, user=Depends(get_current_user)):
 async def transition_status(proposal_id: str, payload: StatusTransitionIn, user=Depends(get_current_user)):
     return await service.transition_status(
         user_id=user["id"], proposal_id=proposal_id, target=payload.status, reason=payload.reason,
+        attachments=payload.attachments,
     )
 
 

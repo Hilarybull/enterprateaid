@@ -140,10 +140,17 @@ export default function LoginPage() {
     if (pendingJoin) {
       sessionStorage.removeItem("ea_pending_join");
       navigate(`/join/${pendingJoin}`, { replace: true });
-    } else {
-      navigate("/dashboard", { replace: true });
+      return;
     }
-  }, [token, navigate]);
+    // Honour ?next= for deep-link flows (e.g. "sign in to submit a proposal").
+    // Only same-origin relative paths are accepted.
+    const next = searchParams.get("next");
+    if (next && /^\/(?!\/)/.test(next)) {
+      navigate(next, { replace: true });
+      return;
+    }
+    navigate("/dashboard", { replace: true });
+  }, [token, navigate, searchParams]);
 
   async function onSubmit(e) {
     e.preventDefault();

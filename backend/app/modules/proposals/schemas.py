@@ -15,11 +15,15 @@ class ProposalPreferences(BaseModel):
 
 
 # ── Requirements ────────────────────────────────────────────────────────────
+REQUIREMENT_RESPONSE_TYPES = ("text", "paragraph", "link", "number", "file", "image")
+
+
 class RequirementIn(BaseModel):
     id: Optional[str] = None
     text: str = Field(min_length=1, max_length=2000)
     mandatory: bool = False
     weight: int = Field(default=1, ge=1, le=10)
+    response_type: Literal["text", "paragraph", "link", "number", "file", "image"] = "text"
 
 
 # ── Requests ───────────────────────────────────────────────────────────────
@@ -72,16 +76,17 @@ class ProposalSectionIn(BaseModel):
     content: str = Field(max_length=20000)
 
 
-class RequirementResponseIn(BaseModel):
-    requirement_id: str
-    response: str = Field(max_length=10000)
-
-
 class AttachmentIn(BaseModel):
     url: str
     filename: str = Field(max_length=300)
     mime: Optional[str] = Field(default=None, max_length=120)
     size: Optional[int] = Field(default=None, ge=0)
+
+
+class RequirementResponseIn(BaseModel):
+    requirement_id: str
+    response: Optional[str] = Field(default=None, max_length=10000)   # text / paragraph / link / number
+    attachment: Optional[AttachmentIn] = None                         # file / image
 
 
 class ProposalSubmitIn(BaseModel):
@@ -100,11 +105,13 @@ class ProposalReviseIn(BaseModel):
     requirement_responses: Optional[list[RequirementResponseIn]] = None
     attachments: Optional[list[AttachmentIn]] = None
     note: Optional[str] = Field(default=None, max_length=2000)
+    note_attachments: Optional[list[AttachmentIn]] = None  # files attached to the clarification reply
 
 
 class StatusTransitionIn(BaseModel):
     status: str
     reason: Optional[str] = Field(default=None, max_length=2000)
+    attachments: Optional[list[AttachmentIn]] = None  # files attached to a clarification request
 
 
 class LinkRequestIn(BaseModel):

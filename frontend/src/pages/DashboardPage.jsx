@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import SectionCard from "../components/SectionCard";
 import Button from "../components/Button";
@@ -31,6 +31,7 @@ export default function DashboardPage() {
   const [error, setError] = useState(null);
   const [comingSoonFeature, setComingSoonFeature] = useState(null);
   const [workspaceGateOpen, setWorkspaceGateOpen] = useState(false);
+  const [livePlanSummary, setLivePlanSummary] = useState(null);
 
   function openComingSoon(feature) {
     setComingSoonFeature(feature);
@@ -66,6 +67,21 @@ export default function DashboardPage() {
           catalogue: data?.catalogue || { products: [], customers: [], vendors: [] }
         });
         setAcceptedValidation(getAcceptedWorkspaceValidation(data));
+
+        // Load live plan assumptions quietly
+        try {
+          const lp = await apiRequest(`/businesses/${workspaceId}/live-plan`, "GET");
+          if (!alive) return;
+          const rawA = Array.isArray(lp?.plan?.assumptions) ? lp.plan.assumptions : [];
+          if (rawA.length) {
+            const map = {};
+            for (const a of rawA) {
+              try { map[a.metric_code] = JSON.parse(a.assumption_value_json); }
+              catch { map[a.metric_code] = a.assumption_value_json; }
+            }
+            setLivePlanSummary(map);
+          }
+        } catch { /* no live plan yet */ }
       } catch (e) {
         if (!alive) return;
         setError(e instanceof Error ? e.message : "Failed to load dashboard data.");
@@ -127,6 +143,25 @@ export default function DashboardPage() {
 
     return { totalRevenue, cashBalance, receivables, totalCosts };
   }, [snapshot]);
+
+  const planKpis = useMemo(() => {
+    if (!livePlanSummary) return null;
+    const planRev = Number(livePlanSummary.monthly_revenue_target) || 0;
+    const planCost = Number(livePlanSummary.monthly_costs) || 0;
+    const planMargin = Number(livePlanSummary.gross_margin_pct) || 0;
+    const actualRev = snapshotKpis.totalRevenue;
+    const actualCost = snapshotKpis.totalCosts;
+    const actualMargin = actualRev > 0 ? ((actualRev - actualCost) / actualRev) * 100 : 0;
+    const revPct = planRev > 0 ? (actualRev / planRev) * 100 : null;
+    const costPct = planCost > 0 ? (actualCost / planCost) * 100 : null;
+    const marginDiff = planMargin > 0 ? actualMargin - planMargin : null;
+    // Customers / subscribers
+    const customerTarget = Number(livePlanSummary.active_customers_target) || 0;
+    const actualCustomers = (snapshot.catalogue?.customers || []).length;
+    const planProducts = Array.isArray(livePlanSummary.products_services) ? livePlanSummary.products_services.length : 0;
+    const actualProducts = (snapshot.catalogue?.products || []).filter(p => !p.archived).length;
+    return { planRev, planCost, planMargin, actualRev, actualCost, actualMargin, revPct, costPct, marginDiff, customerTarget, actualCustomers, planProducts, actualProducts };
+  }, [livePlanSummary, snapshotKpis]);
 
   const financialHealthCards = [
     {
@@ -307,6 +342,135 @@ export default function DashboardPage() {
           </p>
         )}
       </div>
+
+      {/* Live Business Plan summary */}
+      {livePlanSummary && (
+        <div className="rounded-2xl border border-indigo-100 bg-white p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-indigo-500">Live Business Plan</div>
+              <div className="mt-0.5 text-lg font-bold text-slate-900">{livePlanSummary.business_name || "Adopted Plan"}</div>
+              <div className="mt-1 flex flex-wrap gap-x-3 text-xs font-semibold text-slate-700">
+                {livePlanSummary.industry && <span>{livePlanSummary.industry}</span>}
+                {livePlanSummary.location && <span className="text-indigo-600">{livePlanSummary.location}</span>}
+                {livePlanSummary.pricing_model && <span>{livePlanSummary.pricing_model}</span>}
+              </div>
+            </div>
+            <Link
+              to="/business-plan"
+              className="shrink-0 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition"
+            >
+              Open plan
+            </Link>
+          </div>
+
+          {/* Plan vs Actual KPIs */}
+          {planKpis && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {/* Revenue */}
+              {planKpis.planRev > 0 && (() => {
+                const pct = planKpis.revPct;
+                const tone = pct == null ? "slate" : pct >= 100 ? "emerald" : pct >= 70 ? "amber" : "rose";
+                const toneText = { emerald: "text-emerald-600", amber: "text-amber-600", rose: "text-rose-600", slate: "text-slate-400" };
+                const status = { emerald: "On target", amber: "Behind", rose: "Below target", slate: "" };
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Revenue / mo</div>
+                    <div className="mt-0.5 text-base font-bold text-slate-900">{formatCurrency(planKpis.planRev, currency)}</div>
+                    <div className="mt-1 border-t border-slate-100 pt-1 flex items-center justify-between gap-1">
+                      <span className="text-[10px] text-slate-500">Actual <span className="font-semibold text-slate-700">{formatCurrency(planKpis.actualRev, currency)}</span></span>
+                      {pct != null && <span className={`text-[10px] font-bold ${toneText[tone]}`}>{pct.toFixed(0)}%{status[tone] ? ` · ${status[tone]}` : ""}</span>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Costs — always shown, even when the plan budget is zero */}
+              {(() => {
+                const pct = planKpis.costPct;
+                const tone = pct == null ? "slate" : pct <= 100 ? "emerald" : pct <= 130 ? "amber" : "rose";
+                const toneText = { emerald: "text-emerald-600", amber: "text-amber-600", rose: "text-rose-600", slate: "text-slate-400" };
+                const status = { emerald: "Under budget", amber: "Near limit", rose: "Over budget", slate: "" };
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Cost budget / mo</div>
+                    <div className="mt-0.5 text-base font-bold text-slate-900">{formatCurrency(planKpis.planCost, currency)}</div>
+                    <div className="mt-1 border-t border-slate-100 pt-1 flex items-center justify-between gap-1">
+                      <span className="text-[10px] text-slate-500">Actual <span className="font-semibold text-slate-700">{formatCurrency(planKpis.actualCost, currency)}</span></span>
+                      {pct != null && <span className={`text-[10px] font-bold ${toneText[tone]}`}>{pct.toFixed(0)}%{status[tone] ? ` · ${status[tone]}` : ""}</span>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Gross margin */}
+              {planKpis.planMargin > 0 && (() => {
+                const diff = planKpis.marginDiff;
+                const tone = diff == null ? "slate" : diff >= 0 ? "emerald" : diff >= -5 ? "amber" : "rose";
+                const toneText = { emerald: "text-emerald-600", amber: "text-amber-600", rose: "text-rose-600", slate: "text-slate-400" };
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Gross margin</div>
+                    <div className="mt-0.5 text-base font-bold text-slate-900">{planKpis.planMargin}%</div>
+                    <div className="mt-1 border-t border-slate-100 pt-1 flex items-center justify-between gap-1">
+                      <span className="text-[10px] text-slate-500">Actual <span className="font-semibold text-slate-700">{planKpis.actualMargin.toFixed(1)}%</span></span>
+                      {diff != null && <span className={`text-[10px] font-bold ${toneText[tone]}`}>{diff >= 0 ? "+" : ""}{diff.toFixed(1)}pp</span>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Customers / Products */}
+              {(() => {
+                const useCustomers = planKpis.customerTarget > 0;
+                const actual = useCustomers ? planKpis.actualCustomers : planKpis.actualProducts;
+                const target = useCustomers ? planKpis.customerTarget : planKpis.planProducts;
+                const pct = target > 0 ? (actual / target) * 100 : null;
+                const tone = pct == null ? "slate" : pct >= 100 ? "emerald" : pct >= 50 ? "amber" : "rose";
+                const toneText = { emerald: "text-emerald-600", amber: "text-amber-600", rose: "text-rose-600", slate: "text-slate-400" };
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{useCustomers ? "Customer target" : "Products"}</div>
+                    <div className="mt-0.5 text-base font-bold text-slate-900">{target || "—"}</div>
+                    <div className="mt-1 border-t border-slate-100 pt-1 flex items-center justify-between gap-1">
+                      <span className="text-[10px] text-slate-500">Actual <span className="font-semibold text-slate-700">{actual}</span></span>
+                      {pct != null && <span className={`text-[10px] font-bold ${toneText[tone]}`}>{pct.toFixed(0)}%</span>}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Target market */}
+          {livePlanSummary.target_market && (
+            <div className="text-xs text-slate-600">
+              <span className="font-semibold text-slate-400">Target market </span>{livePlanSummary.target_market}
+            </div>
+          )}
+
+          {/* Products */}
+          {Array.isArray(livePlanSummary.products_services) && livePlanSummary.products_services.length > 0 && (
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Products and Services</div>
+              <div className="space-y-1">
+                {livePlanSummary.products_services.map((p, i) => {
+                  const name = typeof p === "string" ? p : (p?.name || "");
+                  const price = typeof p === "object"
+                    ? (p?.price_label || (p?.unit_price != null ? formatCurrency(p.unit_price, currency) : null) || (p?.base_price != null ? formatCurrency(p.base_price, currency) : null))
+                    : null;
+                  return (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-slate-800">{String(name)}</span>
+                      {price && <span className="rounded bg-white border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{String(price)}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
