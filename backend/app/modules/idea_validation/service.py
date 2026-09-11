@@ -70,6 +70,9 @@ async def create_workspace(
         update = {"data": merged, "updated_at": now.isoformat()}
         if name and name.strip():
             update["name"] = name.strip()
+        # Snapshot the pre-write state — this path also fully replaces
+        # non-financials top-level keys and deserves the same safety net.
+        await _snapshot_before_write(str(existing["id"]), existing.get("name") or name or "Unnamed", existing.get("data") or {})
         await sb_update(
             "workspaces",
             filters=[("id", "eq", existing["id"]), ("user_id", "eq", user_id)],
@@ -1179,10 +1182,14 @@ async def market_fit(
 
 
 MAX_SNAPSHOTS = 50
-SNAPSHOT_INTERVAL_MINUTES = 30
+SNAPSHOT_INTERVAL_MINUTES = 15
+SNAPSHOT_TIMEOUT_SECONDS = 4.0
 
 
-async def _save_snapshot_to_mongo(workspace_id: str, workspace_name: str, data: Dict[str, Any], now_iso: str) -> None:
+async def _save_snapshot_to_mongo(workspace_id: str, workspace_name: str, data: Dict[str, Any], now_iso: str) -> bool:
+    """Persist a pre-write copy of a workspace's data. Returns True if written,
+    False if rate-limited or failed. Never raises — but DOES log failures so a
+    misconfigured / unreachable Mongo is visible instead of silent."""
     try:
         from app.core.database import get_mongo_db
         db = get_mongo_db()
@@ -1194,12 +1201,12 @@ async def _save_snapshot_to_mongo(workspace_id: str, workspace_name: str, data: 
             sort=[("created_at", -1)],
             projection={"created_at": 1},
         )
-        if latest:
+        if latest and latest.get("created_at"):
             try:
-                last_dt = datetime.fromisoformat(latest["created_at"].replace("Z", "+00:00"))
+                last_dt = datetime.fromisoformat(str(latest["created_at"]).replace("Z", "+00:00"))
                 now_dt = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
                 if (now_dt - last_dt).total_seconds() < SNAPSHOT_INTERVAL_MINUTES * 60:
-                    return
+                    return False
             except Exception:
                 pass
 
@@ -1216,8 +1223,36 @@ async def _save_snapshot_to_mongo(workspace_id: str, workspace_name: str, data: 
         ).sort("created_at", -1).skip(MAX_SNAPSHOTS).to_list(length=None)
         if oldest_ids:
             await col.delete_many({"_id": {"$in": [d["_id"] for d in oldest_ids]}})
-    except Exception:
-        pass  # Snapshot failure must never break the main save path
+        return True
+    except Exception as exc:  # never break the save path — but do not hide it
+        logging.getLogger(__name__).warning(
+            "workspace snapshot FAILED for %s: %s: %s",
+            workspace_id, type(exc).__name__, exc,
+        )
+        return False
+
+
+async def _snapshot_before_write(workspace_id: str, workspace_name: str, data: Dict[str, Any]) -> None:
+    """Capture the current (pre-write) workspace state, AWAITED and time-bounded.
+
+    Previously this was scheduled with asyncio.create_task() and never awaited —
+    on the hosting platform the request returns and the orphan task is dropped
+    before it runs, which is why ~one snapshot was ever written. It is now
+    awaited inline with a hard timeout so a slow/unreachable Mongo can delay a
+    save by at most SNAPSHOT_TIMEOUT_SECONDS, never lose the snapshot.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await asyncio.wait_for(
+            _save_snapshot_to_mongo(workspace_id, workspace_name, dict(data or {}), now_iso),
+            timeout=SNAPSHOT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logging.getLogger(__name__).warning(
+            "workspace snapshot timed out (%ss) for %s", SNAPSHOT_TIMEOUT_SECONDS, workspace_id
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("workspace snapshot error for %s: %s", workspace_id, exc)
 
 
 async def update_workspace(
@@ -1245,12 +1280,10 @@ async def update_workspace(
 
     ws_name = (name and str(name).strip()) or ws.name or "Unnamed"
 
-    # Fire-and-forget snapshot to MongoDB (never block the main save)
-    try:
-        # schedule background task to avoid blocking PATCH
-        asyncio.create_task(_save_snapshot_to_mongo(str(ws.id), ws_name, dict(ws.data or {}), now.isoformat()))
-    except Exception as e:
-        logger.exception("snapshot scheduling failed for workspace %s: %s", workspace_id, e)
+    # Snapshot the CURRENT (pre-write) state to MongoDB before we overwrite it.
+    # Awaited + time-bounded (see _snapshot_before_write) — the old fire-and-forget
+    # task was being dropped, so this safety net had effectively never worked.
+    await _snapshot_before_write(str(ws.id), ws_name, ws.data or {})
 
     update = {"data": merged, "updated_at": now.isoformat()}
     if name and str(name).strip():
