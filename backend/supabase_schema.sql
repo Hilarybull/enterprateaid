@@ -8,6 +8,17 @@ create table if not exists users (
   google_sub text,
   name text,
   picture text,
+  -- Reconstructed from code (register/login/verify-email/forgot-password) —
+  -- this table was never fully captured in a migration, so a live database
+  -- created before these columns existed is missing them: PGRST204 "Could
+  -- not find the 'company' column of 'users'" is exactly that gap surfacing.
+  phone text,
+  company text,
+  email_verified boolean not null default false,
+  email_verification_token text,
+  is_blocked boolean not null default false,
+  reset_token text,
+  reset_token_expires_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -80,6 +91,8 @@ create table if not exists user_subscriptions (
   current_period_start timestamptz,
   current_period_end timestamptz,
   trial_started_at timestamptz,
+  cancel_at_period_end boolean not null default false,
+  cancelled_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

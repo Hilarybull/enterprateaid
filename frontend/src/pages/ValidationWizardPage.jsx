@@ -24,10 +24,16 @@ import CreditConfirmModal from "../components/CreditConfirmModal";
 function humanizeValidationError(e) {
   const msg = e instanceof Error ? e.message : String(e || "");
   if (e?.code === "NETWORK_ERROR" || msg === "NETWORK_ERROR") {
-    const base = import.meta.env.VITE_API_URL ?? import.meta.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000";
-    return `Can't reach the server at ${base}. Start the backend and check your API URL.`;
+    // Same dev-facing-copy-shown-to-real-users issue fixed in store/auth.js —
+    // the API base URL and "check the backend" phrasing only make sense to
+    // a developer running this locally.
+    if (import.meta.env.DEV) {
+      const base = import.meta.env.VITE_API_URL ?? import.meta.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000";
+      return `Can't reach the server at ${base}. Start the backend and check your API URL.`;
+    }
+    return "We couldn't reach the server. Please check your connection and try again in a moment.";
   }
-  if (msg === "TIMEOUT") return "The server is taking too long to respond. Check the backend logs and try again.";
+  if (msg === "TIMEOUT") return "The server is taking too long to respond. Please try again in a moment.";
   if (msg.startsWith("HTTP 401:")) return "Please sign in to continue.";
   if (msg.startsWith("HTTP 403:")) {
     const detail = msg.replace(/^HTTP 403:\s*/i, "").trim();

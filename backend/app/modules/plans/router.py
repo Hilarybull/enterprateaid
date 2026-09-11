@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.core.config import get_settings
-from app.core.supabase import sb_insert, sb_select, sb_upsert
+from app.core.supabase import sb_insert, sb_select, sb_update, sb_upsert
 from app.modules.plans.schemas import (
     CheckoutRequest, CheckoutResponse,
     SubscribeRequest, SubscribeResponse,
@@ -611,6 +611,7 @@ async def stripe_webhook(request: Request):
         sub_id = sub_obj.get("id") if isinstance(sub_obj, dict) else sub_obj.id
         new_status = sub_obj.get("status") if isinstance(sub_obj, dict) else sub_obj.status
         cancel_at = sub_obj.get("canceled_at") if isinstance(sub_obj, dict) else getattr(sub_obj, "canceled_at", None)
+        cancel_at_period_end = bool(sub_obj.get("cancel_at_period_end") if isinstance(sub_obj, dict) else getattr(sub_obj, "cancel_at_period_end", False))
         customer_id = sub_obj.get("customer") if isinstance(sub_obj, dict) else getattr(sub_obj, "customer", None)
         meta = sub_obj.get("metadata", {}) if isinstance(sub_obj, dict) else getattr(sub_obj, "metadata", {})
 
@@ -623,6 +624,7 @@ async def stripe_webhook(request: Request):
         if rows:
             updates: dict = {
                 "status": "cancelled" if (new_status == "canceled" or cancel_at) else new_status,
+                "cancel_at_period_end": cancel_at_period_end,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             if cancel_at:
@@ -689,6 +691,7 @@ async def get_my_subscription(user=Depends(get_current_user)) -> SubscriptionOut
             current_period_end=sub.get("current_period_end"),
             trial_started_at=sub.get("trial_started_at"),
             stripe_subscription_id=sub.get("stripe_subscription_id"),
+            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
         )
 
     # No active paid subscription → check user creation date
@@ -716,3 +719,59 @@ async def get_my_subscription(user=Depends(get_current_user)) -> SubscriptionOut
         billing_period="monthly",
         status="active",
     )
+
+
+# ── Authenticated: self-serve cancel / resume ─────────────────────────────────
+# There was previously no way for a paying user to cancel their own
+# subscription — "Cancel anytime" was checkout copy with no feature behind it.
+# Cancels at the end of the current paid period (not immediately), matching
+# that copy: the user keeps what they already paid for and it simply won't
+# renew, rather than losing access mid-period.
+
+async def _get_own_active_subscription(user_id: str) -> dict:
+    sub = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
+    if not sub or sub.get("status") not in ("active", "trial"):
+        raise HTTPException(status_code=404, detail="No active subscription found.")
+    if not sub.get("stripe_subscription_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="This plan isn't billed through Stripe, so there's nothing to cancel here. Contact support.",
+        )
+    return sub
+
+
+@router.post("/cancel-subscription", response_model=SubscriptionOut)
+async def cancel_subscription(user=Depends(get_current_user)) -> SubscriptionOut:
+    sub = await _get_own_active_subscription(user["id"])
+    client = _stripe_client()
+    try:
+        client.subscriptions.update(sub["stripe_subscription_id"], {"cancel_at_period_end": True})
+    except Exception as e:
+        logger.error("cancel_subscription failed for user %s: %s", user["id"], e)
+        raise HTTPException(status_code=502, detail="Could not reach Stripe to cancel your subscription. Please try again.")
+
+    await sb_update(
+        "user_subscriptions",
+        payload={"cancel_at_period_end": True, "updated_at": datetime.now(timezone.utc).isoformat()},
+        filters=[("user_id", "eq", user["id"])],
+    )
+    return await get_my_subscription(user=user)
+
+
+@router.post("/resume-subscription", response_model=SubscriptionOut)
+async def resume_subscription(user=Depends(get_current_user)) -> SubscriptionOut:
+    """Undo a pending cancel-at-period-end, before the period actually ends."""
+    sub = await _get_own_active_subscription(user["id"])
+    client = _stripe_client()
+    try:
+        client.subscriptions.update(sub["stripe_subscription_id"], {"cancel_at_period_end": False})
+    except Exception as e:
+        logger.error("resume_subscription failed for user %s: %s", user["id"], e)
+        raise HTTPException(status_code=502, detail="Could not reach Stripe to resume your subscription. Please try again.")
+
+    await sb_update(
+        "user_subscriptions",
+        payload={"cancel_at_period_end": False, "updated_at": datetime.now(timezone.utc).isoformat()},
+        filters=[("user_id", "eq", user["id"])],
+    )
+    return await get_my_subscription(user=user)

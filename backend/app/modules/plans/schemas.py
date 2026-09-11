@@ -46,3 +46,4 @@ class SubscriptionOut(BaseModel):
     current_period_end: Optional[str] = None
     trial_started_at: Optional[str] = None
     stripe_subscription_id: Optional[str] = None
+    cancel_at_period_end: bool = False

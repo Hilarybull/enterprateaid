@@ -5,8 +5,15 @@ import { useWorkspaceStore } from "./workspace";
 function humanizeAuthError(e) {
   const msg = e instanceof Error ? e.message : String(e || "");
   if (e?.code === "NETWORK_ERROR" || msg === "NETWORK_ERROR") {
-    const base = import.meta.env.VITE_API_URL ?? import.meta.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000";
-    return `Can't reach the server at ${base}. Start the backend and check your API URL.`;
+    // This was previously "Can't reach the server at <url>. Start the backend
+    // and check your API URL." — copy written for a developer running the app
+    // locally, which a real customer saw verbatim during signup on the live
+    // site. Dev-only detail (the API base URL) now only appears in dev builds.
+    if (import.meta.env.DEV) {
+      const base = import.meta.env.VITE_API_URL ?? import.meta.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000";
+      return `Can't reach the server at ${base}. Start the backend and check your API URL.`;
+    }
+    return "We couldn't reach the server. Please check your connection and try again in a moment.";
   }
   if (msg === "AUTH_RESPONSE_INVALID") return "Authentication failed. Please try again.";
   if (msg.startsWith("HTTP 401:")) return "Invalid credentials. Try again or create an account.";

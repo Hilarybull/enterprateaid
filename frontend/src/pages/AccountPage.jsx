@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
 import { useWorkspaceStore } from "../store/workspace";
 import { apiRequest } from "../api/client";
+import { planLabel, getPlan, normalisePlanKey } from "../lib/plans";
 
 function initialsFromName(name, email) {
   const source = name?.trim() || email || "";
@@ -148,7 +149,14 @@ function Textarea({ value, onChange, placeholder, rows = 3, maxLength }) {
 const TABS = [
   { id: "workspace", label: "Workspace" },
   { id: "account", label: "Account" },
+  { id: "billing", label: "Billing" },
 ];
+
+function fmtDate(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+}
 
 function TabBar({ active, onChange }) {
   return (
@@ -722,6 +730,161 @@ function WorkspaceEditForm({ workspaceId, initialData, onSaved, onCancel }) {
   );
 }
 
+function BillingTab() {
+  const navigate = useNavigate();
+  const [sub, setSub] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  function load() {
+    setLoading(true);
+    apiRequest("/plans/my", "GET")
+      .then((data) => setSub(data))
+      .catch(() => setSub(null))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const isFree = !sub || ["free_trial", "explorer"].includes(sub.plan_key);
+  const isCancellable = sub && !isFree && sub.status === "active" && sub.stripe_subscription_id;
+
+  async function handleCancel() {
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await apiRequest("/plans/cancel-subscription", "POST");
+      setSub(updated);
+      setConfirmCancel(false);
+    } catch (e) {
+      setError((e instanceof Error ? e.message : String(e)).replace(/^HTTP \d+:\s*/i, "") || "Could not cancel your subscription. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResume() {
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await apiRequest("/plans/resume-subscription", "POST");
+      setSub(updated);
+    } catch (e) {
+      setError((e instanceof Error ? e.message : String(e)).replace(/^HTTP \d+:\s*/i, "") || "Could not resume your subscription. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-xl mx-auto">
+        <Card><div className="px-6 py-10 text-center text-sm text-slate-400">Loading…</div></Card>
+      </div>
+    );
+  }
+
+  const plan = getPlan(normalisePlanKey(sub?.plan_key));
+  const renewDate = fmtDate(sub?.current_period_end);
+
+  return (
+    <div className="max-w-xl mx-auto space-y-4">
+      <Card>
+        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Plan &amp; billing</h2>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Your current subscription.</p>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                {planLabel(sub?.plan_key, sub?.status)}
+              </div>
+              {!isFree && plan ? (
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {sub.billing_period === "annual" ? `£${plan.annualTotal}/yr` : `£${plan.monthlyPrice}/mo`}
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/pricing")}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {isFree ? "Upgrade" : "Change plan"}
+            </button>
+          </div>
+
+          {sub?.cancel_at_period_end ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              Your subscription is set to cancel{renewDate ? ` on ${renewDate}` : " at the end of this billing period"}.
+              You'll keep access until then.
+            </div>
+          ) : renewDate ? (
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Renews automatically on <strong>{renewDate}</strong>.
+            </p>
+          ) : null}
+
+          {error && (
+            <p className="rounded-lg bg-rose-50 px-3 py-2 text-[12px] text-rose-700 dark:bg-rose-900/20 dark:text-rose-400">
+              {error}
+            </p>
+          )}
+
+          {isCancellable && (
+            sub.cancel_at_period_end ? (
+              <button
+                type="button"
+                onClick={handleResume}
+                disabled={busy}
+                className="w-full rounded-xl border-2 border-emerald-600 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+              >
+                {busy ? "Resuming…" : "Resume subscription"}
+              </button>
+            ) : confirmCancel ? (
+              <div className="space-y-2 rounded-xl border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/50 dark:bg-rose-950/20">
+                <p className="text-[13px] text-rose-800 dark:text-rose-300">
+                  Cancel your {planLabel(sub.plan_key, sub.status)} plan? You'll keep access until{" "}
+                  {renewDate || "the end of this billing period"}, then it won't renew.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={busy}
+                    className="flex-1 rounded-lg bg-rose-600 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                  >
+                    {busy ? "Cancelling…" : "Yes, cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmCancel(false)}
+                    disabled={busy}
+                    className="flex-1 rounded-lg border border-slate-200 py-2 text-sm font-medium text-slate-700 hover:bg-white dark:border-slate-700 dark:text-slate-200"
+                  >
+                    Keep my plan
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmCancel(true)}
+                className="w-full rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel subscription
+              </button>
+            )
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function WorkspaceTab({ workspaceId }) {
   const setWorkspaceCompanyName = useWorkspaceStore((s) => s.setWorkspaceCompanyName);
   const setWorkspaceLogo = useWorkspaceStore((s) => s.setWorkspaceLogo);
@@ -1261,6 +1424,11 @@ export default function AccountPage() {
         {/* ── Workspace tab ── */}
         {tab === "workspace" && (
           <WorkspaceTab workspaceId={workspaceId} />
+        )}
+
+        {/* ── Billing tab ── */}
+        {tab === "billing" && (
+          <BillingTab />
         )}
 
       </div>
