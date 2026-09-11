@@ -948,6 +948,7 @@ function RequestsTab({ openNewNonce = 0 }) {
                   </div>
                   <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                     {r.submission_count} submission{r.submission_count === 1 ? "" : "s"}
+                    {" · "}{r.view_count || 0} view{r.view_count === 1 ? "" : "s"}
                     {r.deadline ? ` · closes ${fmtDate(r.deadline)}` : ""}
                     {r.submission_cap ? ` · cap ${r.submission_cap}` : ""}
                   </div>

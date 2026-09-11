@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 
 from app.core.config import get_settings
-from app.core.supabase import sb_delete, sb_insert, sb_select, sb_update
+from app.core.supabase import sb_delete, sb_insert, sb_select, sb_update, sb_rpc
 from app.modules.proposals import state_machine as sm
 from app.modules.proposals.schemas import (
     CoverLetterIn,
@@ -247,6 +247,7 @@ def _request_out(row: dict) -> dict:
         "visibility": row.get("visibility") or "marketplace",
         "status": row.get("status") or "DRAFT",
         "submission_count": int(row.get("submission_count") or 0),
+        "view_count": int(row.get("view_count") or 0),
         "invited_emails": row.get("invited_emails") or [],
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
@@ -255,8 +256,12 @@ def _request_out(row: dict) -> dict:
 
 def _public_request_out(row: dict, *, is_owner: bool = False) -> dict:
     out = _request_out(row)
-    # Hide the owner's internal fields from the public view.
+    # Hide the owner's internal fields from the public view. View count is
+    # owner-only analytics — a visitor should never see how many other people
+    # have looked at this listing.
     out.pop("invited_emails", None)
+    if not is_owner:
+        out.pop("view_count", None)
     if not out.get("budget_visible"):
         out["budget_range"] = None
         out["budget_currency"] = None
@@ -535,7 +540,7 @@ async def list_public_requests(*, search: str | None = None, type_filter: str | 
     return {"items": items, "total": len(items)}
 
 
-async def get_public_request(*, request_id: str, user_id: str | None) -> dict:
+async def get_public_request(*, request_id: str, user_id: str | None, viewer_key: str | None = None) -> dict:
     row = await sb_select("proposal_requests", filters=[("id", "eq", request_id)], single=True)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
@@ -548,6 +553,18 @@ async def get_public_request(*, request_id: str, user_id: str | None) -> dict:
         is_owner = bool(owner_ws and owner_ws["id"] == row["workspace_id"])
     if row.get("status") != "PUBLISHED" and not is_owner:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+    if not is_owner and viewer_key:
+        # Count unique visitor views, never the owner's own previews of their
+        # listing, and never the same viewer twice (see record_proposal_request_view).
+        try:
+            new_count = await sb_rpc("record_proposal_request_view", {
+                "p_request_id": request_id,
+                "p_viewer_key": viewer_key,
+            })
+            if isinstance(new_count, (int, float)):
+                row["view_count"] = int(new_count)
+        except Exception as exc:
+            logger.warning("view count record failed for request %s: %s", request_id, exc)
     out = _public_request_out(row, is_owner=is_owner)
     try:
         out["company"] = _company_public(await _workspace_row(row["workspace_id"]))

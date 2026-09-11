@@ -9,7 +9,7 @@ export function getApiBaseUrl() {
 
 export async function apiRequest(path, method, body, options) {
   const token = localStorage.getItem("ea_token");
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", ...(options?.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
 
   let res;

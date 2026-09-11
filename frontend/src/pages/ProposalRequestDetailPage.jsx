@@ -7,6 +7,7 @@ import ApplyModal from "../components/proposals/ApplyModal";
 import { apiRequest } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { readProposalContext } from "../lib/proposalContext";
+import { getVisitorId } from "../lib/visitorId";
 import enterprateLogo from "../logo.png";
 
 function fmtDate(v) {
@@ -97,7 +98,9 @@ export default function ProposalRequestDetailPage() {
     const watchdog = setTimeout(() => {
       if (!cancelled) { setError("This request is taking too long to load. Please try again shortly."); setLoading(false); }
     }, 15000);
-    apiRequest(`/proposals/public/requests/${requestId}`, "GET")
+    apiRequest(`/proposals/public/requests/${requestId}`, "GET", undefined, {
+      headers: { "X-Visitor-Id": getVisitorId() },
+    })
       .then((d) => { if (!cancelled) { setRequest(d); setError(null); } })
       .catch((e) => {
         if (cancelled) return;
@@ -195,6 +198,9 @@ export default function ProposalRequestDetailPage() {
                 <span>Budget: <strong>{request.budget_currency ? `${request.budget_currency} ` : ""}{request.budget_range}</strong></span>
               ) : null}
               {request.submission_cap ? <span>Submissions accepted: {request.submission_count}/{request.submission_cap}</span> : null}
+              {request.is_owner ? (
+                <span>{request.view_count || 0} view{request.view_count === 1 ? "" : "s"}</span>
+              ) : null}
             </div>
 
             {request.description ? (

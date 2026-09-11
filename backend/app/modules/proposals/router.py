@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import anyio
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 
 from app.core.supabase import get_supabase_client
 from app.shared.auth.deps import get_current_user, get_optional_user
@@ -98,8 +98,22 @@ async def public_requests(
 
 
 @router.get("/public/requests/{request_id}")
-async def public_request_detail(request_id: str, user=Depends(get_optional_user)):
-    return await service.get_public_request(request_id=request_id, user_id=user["id"] if user else None)
+async def public_request_detail(
+    request_id: str,
+    request: Request,
+    user=Depends(get_optional_user),
+    x_visitor_id: str | None = Header(default=None, convert_underscores=True),
+):
+    # Unique-view dedup key: the signed-in user, or a client-generated anonymous
+    # id (localStorage, sent by the frontend) if not signed in. Falls back to the
+    # caller's IP only when neither is present, so a view still gets counted.
+    if user:
+        viewer_key = f"user:{user['id']}"
+    elif x_visitor_id and x_visitor_id.strip():
+        viewer_key = f"anon:{x_visitor_id.strip()[:128]}"
+    else:
+        viewer_key = f"ip:{request.client.host if request.client else 'unknown'}"
+    return await service.get_public_request(request_id=request_id, user_id=user["id"] if user else None, viewer_key=viewer_key)
 
 
 # ── Submission (proposer) ────────────────────────────────────────────────
