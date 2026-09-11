@@ -62,7 +62,7 @@ export default function BusinessAssistant() {
         friendly = "It looks like you haven't set up a workspace yet. Create one first and I'll be able to answer questions about your business.";
       } else if (raw.includes("401") || raw.includes("403")) {
         friendly = "Your session may have expired. Try refreshing the page and signing in again.";
-      } else if (raw === "NETWORK_ERROR" || raw.toLowerCase().includes("network")) {
+      } else if (error?.code === "NETWORK_ERROR" || raw === "NETWORK_ERROR" || raw.toLowerCase().includes("network") || raw.toLowerCase().includes("reach the server")) {
         friendly = "I can't reach the server right now. Check your connection and try again.";
       } else if (raw.includes("500")) {
         friendly = "Something went wrong on our end. Please try again in a moment.";

@@ -21,6 +21,19 @@ import ReportDownloadPanel from "../components/ReportDownloadPanel";
 import { assembleOutput } from "../lib/contracts/index";
 import CreditConfirmModal from "../components/CreditConfirmModal";
 
+// Errors thrown by apiRequest use "NETWORK_ERROR" as a sentinel (see api/client.js) —
+// every caller is expected to translate it before display. This page previously set
+// e.message straight into the error banner, so a network failure showed the literal
+// string "NETWORK_ERROR" to users instead of readable copy (unlike Business Blueprints,
+// which already has this translation). Route every catch here through this helper.
+function humanizeSimError(e, fallback) {
+  const msg = e instanceof Error ? e.message : String(e || "");
+  if (e?.code === "NETWORK_ERROR" || msg === "NETWORK_ERROR" || /failed to fetch|timeout/i.test(msg)) {
+    return "Network error — please check your connection and try again.";
+  }
+  return msg || fallback;
+}
+
 const FieldLabel = ({ children, info }) => (
   <div className="ea-label flex items-center gap-2">
     <span>{children}</span>
@@ -276,7 +289,7 @@ export default function SimulationPage() {
         setTemplates(tmplRes?.templates || []);
         setHistory(historyRes?.history || []);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load scenario templates.");
+        setError(humanizeSimError(e, "Failed to load scenario templates."));
       } finally {
         setLoading(false);
       }
@@ -360,7 +373,7 @@ export default function SimulationPage() {
     } catch (e) {
       setRiskSignals(financialInsights.riskItems);
       setRecommendations(financialInsights.recommendations);
-      setError(e instanceof Error ? e.message : "Failed to load recommendations.");
+      setError(humanizeSimError(e, "Failed to load recommendations."));
     } finally {
       setLoading(false);
     }
@@ -399,7 +412,7 @@ export default function SimulationPage() {
         setTimeline(timelineRes?.timeline || []);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Scenario run failed.");
+      setError(humanizeSimError(e, "Scenario run failed."));
     } finally {
       setActionLoading(false);
       setScenarioRunningId(null);
@@ -441,7 +454,7 @@ export default function SimulationPage() {
         setTimeline(res?.forecast || []);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Projection failed.");
+      setError(humanizeSimError(e, "Projection failed."));
     } finally {
       if (silent) {
         setAutoProjectionLoading(false);
@@ -513,7 +526,7 @@ export default function SimulationPage() {
       const historyRes = await apiRequest(`/v1/scenario-intelligence/history?business_id=${businessId}&tenant_id=${tenantId}`, "GET");
       setHistory(historyRes?.history || []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save decision.");
+      setError(humanizeSimError(e, "Failed to save decision."));
     } finally {
       setDecisionSaving(false);
     }
@@ -531,7 +544,7 @@ export default function SimulationPage() {
           await apiRequest(`/v1/scenario-intelligence/history?business_id=${businessId}&tenant_id=${tenantId}`, "DELETE");
           setHistory([]);
         } catch (e) {
-          setError(e instanceof Error ? e.message : "Failed to clear history.");
+          setError(humanizeSimError(e, "Failed to clear history."));
         } finally {
           setActionLoading(false);
         }

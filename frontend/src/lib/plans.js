@@ -40,6 +40,8 @@ export const PLANS = [
       "Unlimited invoices & quotations",
       "Fragility Index",
       "Adaptive Scenario Intelligence",
+      "Marketplace proposals",
+      "Integrations access",
       "1 marketplace listing",
       "1 user",
     ],
@@ -65,7 +67,7 @@ export const PLANS = [
       "Fragility Index",
       "Adaptive Scenario Intelligence",
       "RFQ automation workflow",
-      "Marketplace boosts",
+      "Marketplace proposals & boosts",
       "Integrations access",
       "3 users included",
     ],
@@ -133,7 +135,7 @@ export const PLAN_MODULE_ACCESS = {
   // Explorer: all modules included for development/trial optimization
   explorer: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace"],
   // Starter (Insight): 2 scenario simulations included
-  starter_insight: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace"],
+  starter_insight: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace", "integrations"],
   decision_engine: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace", "integrations"],
   growth_navigator: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace"],
   strategic_business_os: ["dashboard", "validation", "blueprint", "simulation", "catalogue", "financials", "registration", "marketplace"],
@@ -142,7 +144,7 @@ export const PLAN_MODULE_ACCESS = {
 // Minimum plan needed to access a module (for upgrade prompts)
 export const MODULE_MIN_PLAN = {
   simulation: "explorer",
-  integrations: "decision_engine",
+  integrations: "starter_insight",
 };
 
 // Submitting a proposal (not just viewing the module) requires a paid plan.

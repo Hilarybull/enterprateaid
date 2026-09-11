@@ -18,25 +18,46 @@ export default function PricingSuccessPage() {
   const refreshSubscription = useAuthStore((s) => s.refreshSubscription);
   const [sub, setSub] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activationFailed, setActivationFailed] = useState(false);
   const sessionId = params.get("session_id");
+  const subscriptionId = params.get("subscription_id");
 
   useEffect(() => {
     async function load() {
       // Eagerly activate the subscription without waiting for the Stripe webhook,
-      // which may be slow or misconfigured and leave the user stuck on trial status.
+      // which may be slow, misconfigured, or (as found investigating a report of
+      // "paid but credits didn't increase") simply never registered against this
+      // backend at all — in which case this call is the ONLY thing that ever
+      // grants the plan's credits. The embedded-card checkout in PricingPage
+      // already calls this once and swallows a failure there (Stripe's
+      // subscription object can briefly still read "incomplete" right after
+      // confirmCardPayment resolves) — this is the guaranteed second attempt,
+      // and the backend itself now retries for a few seconds before giving up.
+      let ok = true;
       if (sessionId) {
         try {
           await apiRequest("/plans/activate-subscription", "POST", { session_id: sessionId });
         } catch (_) {
-          // Non-fatal — fall through and refresh anyway
+          ok = false;
+        }
+      } else if (subscriptionId) {
+        try {
+          await apiRequest("/plans/activate-subscription", "POST", { subscription_id: subscriptionId });
+        } catch (_) {
+          ok = false;
         }
       }
       const updated = await refreshSubscription();
       setSub(updated);
+      // Only flag failure if the plan genuinely never activated — refreshSubscription
+      // reflects the current truth, so a prior attempt failing doesn't matter if a
+      // second one (or the backend's own internal retry) already got there.
+      const stillOnFreePlan = !updated || ["free_trial", "explorer"].includes(updated.plan_key);
+      setActivationFailed(!ok && stillOnFreePlan && (sessionId || subscriptionId));
       setLoading(false);
     }
     load();
-  }, [refreshSubscription, sessionId]);
+  }, [refreshSubscription, sessionId, subscriptionId]);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4 dark:bg-slate-950">
@@ -102,15 +123,23 @@ export default function PricingSuccessPage() {
                   );
                 })()}
               </>
+            ) : activationFailed ? (
+              <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                Your card was charged successfully, but we couldn't confirm the plan upgrade with Stripe just yet.
+                This usually resolves on its own within a few minutes. If your plan and credits still
+                haven't updated after that, contact {" "}
+                <a href="mailto:support@enterprate.ai" className="font-medium underline">support@enterprate.ai</a>{" "}
+                with this reference so we can activate it manually.
+              </p>
             ) : (
               <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
                 Your payment was processed successfully. Your plan will be activated shortly.
               </p>
             )}
 
-            {sessionId && (
+            {(sessionId || subscriptionId) && (
               <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
-                Reference: {sessionId.slice(-12)}
+                Reference: {(sessionId || subscriptionId).slice(-12)}
               </p>
             )}
 

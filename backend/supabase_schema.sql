@@ -21,6 +21,73 @@ create table if not exists workspaces (
   updated_at timestamptz default now()
 );
 
+-- Atomic top-level merge into workspaces.data, replacing the old app-level
+-- read-modify-write in update_workspace() (Python: read ws.data, merge keys in
+-- memory, write the whole blob back). That pattern races: two concurrent PATCH
+-- requests each read data before either write commits, so whichever commits
+-- second overwrites the other's change to a key it never even touched (e.g. a
+-- Catalogue "add customer" PATCH and a Financials "save invoice" PATCH landing
+-- close together — one silently reverts the other's top-level key). Doing the
+-- merge as a single UPDATE ... SET data = data || patch inside Postgres closes
+-- that window: the read and the write happen atomically in one statement.
+-- financials keeps the one-level-deeper merge the app code already special-cased
+-- (so a patch that only touches financials.invoices doesn't wipe
+-- financials.expenses written by another endpoint).
+create or replace function merge_workspace_data(
+  p_workspace_id text,
+  p_user_id text,
+  p_patch jsonb,
+  p_name text default null
+) returns workspaces
+language plpgsql
+as $$
+declare
+  result workspaces;
+begin
+  update workspaces
+  set
+    data = coalesce(data, '{}'::jsonb)
+      || (p_patch - 'financials')
+      || case
+           when p_patch ? 'financials' then
+             jsonb_build_object(
+               'financials',
+               coalesce(data->'financials', '{}'::jsonb) || (p_patch->'financials')
+             )
+           else '{}'::jsonb
+         end,
+    name = coalesce(nullif(trim(p_name), ''), name),
+    updated_at = now()
+  where id = p_workspace_id and user_id = p_user_id
+  returning * into result;
+
+  return result;
+end;
+$$;
+
+-- Reconstructed: referenced throughout the backend (credits, plans, auth,
+-- integrations, idea_validation) but was never captured in a migration file —
+-- it was created ad hoc in the Supabase dashboard on the existing projects.
+-- Included here so a fresh project has it too.
+create table if not exists user_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id text not null unique references users(id) on delete cascade,
+  plan_key text not null default 'explorer',
+  billing_period text not null default 'monthly',
+  status text not null default 'trial',
+  stripe_subscription_id text,
+  stripe_customer_id text,
+  current_period_start timestamptz,
+  current_period_end timestamptz,
+  trial_started_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create index if not exists user_subscriptions_user_idx on user_subscriptions(user_id);
+create index if not exists user_subscriptions_stripe_sub_idx on user_subscriptions(stripe_subscription_id);
+create index if not exists user_subscriptions_stripe_cust_idx on user_subscriptions(stripe_customer_id);
+
 create table if not exists workspace_profiles (
   id uuid primary key default gen_random_uuid(),
   workspace_id text references workspaces(id) on delete cascade,
@@ -317,7 +384,10 @@ create index if not exists mailing_list_email_idx on mailing_list(email);
 
 -- Migration: add rater_email for guest reviews
 alter table marketplace_ratings add column if not exists rater_email text;
-alter table marketplace_ratings add constraint marketplace_ratings_ws_email_unique unique(workspace_id, rater_email);
+do $$ begin
+  alter table marketplace_ratings add constraint marketplace_ratings_ws_email_unique unique(workspace_id, rater_email);
+exception when duplicate_object or duplicate_table then null;
+end $$;
 
 create table if not exists support_messages (
   id text primary key,
@@ -344,3 +414,54 @@ create index if not exists module_interest_feature_idx on module_interest(featur
 create index if not exists module_interest_clicked_idx on module_interest(clicked_at desc);
 -- Migration: drop old unique constraint if it was previously created
 -- alter table module_interest drop constraint if exists module_interest_email_feature_key;
+
+-- Reconstructed (same situation as user_subscriptions above): referenced by
+-- the backend but never captured in a migration file.
+
+create table if not exists demo_requests (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  email text not null,
+  company text not null,
+  phone text,
+  role text,
+  message text,
+  created_at timestamptz default now()
+);
+
+create index if not exists demo_requests_created_idx on demo_requests(created_at desc);
+
+create table if not exists faqs (
+  id uuid primary key default gen_random_uuid(),
+  question text not null,
+  answer text not null,
+  "order" int not null default 0,
+  created_at timestamptz default now()
+);
+
+create index if not exists faqs_order_idx on faqs("order");
+
+create table if not exists plan_waitlist (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  plan_key text not null,
+  billing_period text,
+  joined_at timestamptz default now()
+);
+
+create index if not exists plan_waitlist_email_plan_idx on plan_waitlist(email, plan_key);
+
+create table if not exists research_items (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  type text not null default 'Research',
+  content text,
+  status text not null default 'draft',
+  published_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create index if not exists research_items_status_idx on research_items(status);
+create index if not exists research_items_created_idx on research_items(created_at desc);

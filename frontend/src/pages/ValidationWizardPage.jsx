@@ -23,7 +23,7 @@ import CreditConfirmModal from "../components/CreditConfirmModal";
 
 function humanizeValidationError(e) {
   const msg = e instanceof Error ? e.message : String(e || "");
-  if (msg === "NETWORK_ERROR") {
+  if (e?.code === "NETWORK_ERROR" || msg === "NETWORK_ERROR") {
     const base = import.meta.env.VITE_API_URL ?? import.meta.env.REACT_APP_BACKEND_URL ?? "http://localhost:8000";
     return `Can't reach the server at ${base}. Start the backend and check your API URL.`;
   }
@@ -995,6 +995,14 @@ export default function ValidationWizardPage() {
   const serviceCurrencySymbol = useMemo(() => getCurrencySymbol(serviceCurrency), [serviceCurrency]);
   const savedProfileSnap = useRef(null);
   const profileSnapPending = useRef(false);
+  // Set as soon as the user edits any workspace-profile field. Guards against the
+  // slow /validation/{id} prefill fetch (timeoutMs up to 90s) resolving *after* the
+  // user has already started filling the form and unconditionally merging server
+  // data back over it — which is what made fields like City silently "revert":
+  // the user's click registered fine, but a few hundred ms later the in-flight
+  // prefill response landed and overwrote it with the (blank) server value, with
+  // no error or visible cause.
+  const userEditedProfileRef = useRef(false);
   const [profile, setProfile] = useState(() => ({
     company_name: "",
     logo_data_url: "",
@@ -1553,13 +1561,17 @@ export default function ValidationWizardPage() {
               core_values: Array.isArray(wp.core_values) ? wp.core_values.join(", ") : (wp.core_values || ""),
             };
             profileSnapPending.current = true;
-            setProfile((prev) => ({
-              ...prev,
-              ...wpNormalized,
-              services: Array.isArray(wp.services) && wp.services.length
-                ? wp.services
-                : prev.services,
-            }));
+            setProfile((prev) =>
+              userEditedProfileRef.current
+                ? prev
+                : {
+                    ...prev,
+                    ...wpNormalized,
+                    services: Array.isArray(wp.services) && wp.services.length
+                      ? wp.services
+                      : prev.services,
+                  }
+            );
             if (wp.company_name && !form?.context?.business_name) {
               update("context.business_name", wp.company_name);
             }
@@ -1618,13 +1630,17 @@ export default function ValidationWizardPage() {
             core_values: Array.isArray(wp.core_values) ? wp.core_values.join(", ") : (wp.core_values || ""),
           };
           profileSnapPending.current = true;
-          setProfile((prev) => ({
-            ...prev,
-            ...wpNormalized2,
-            services: Array.isArray(wp.services) && wp.services.length
-              ? wp.services
-              : prev.services,
-          }));
+          setProfile((prev) =>
+            userEditedProfileRef.current
+              ? prev
+              : {
+                  ...prev,
+                  ...wpNormalized2,
+                  services: Array.isArray(wp.services) && wp.services.length
+                    ? wp.services
+                    : prev.services,
+                }
+          );
           if (wp.company_name && !next.context.business_name) {
             next.context.business_name = wp.company_name;
           }
@@ -1741,6 +1757,7 @@ export default function ValidationWizardPage() {
   }
 
   function updateProfile(path, value) {
+    userEditedProfileRef.current = true;
     setProfile((prev) => {
       const next = structuredClone(prev);
       const keys = path.split(".");

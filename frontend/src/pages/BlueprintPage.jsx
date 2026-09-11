@@ -1999,7 +1999,7 @@ export default function BlueprintPage() {
         word_count: selectedDoc === "sales_letter" ? Number(wordCount) || null : null,
         proposal_length: selectedDoc === "client_proposal" ? proposalLength : null,
       };
-      const res = await apiRequestWithRetry("/blueprint/generate", "POST", generateBody, { timeoutMs: 900000 });
+      const res = await apiRequestWithRetry("/blueprint/generate", "POST", generateBody, { timeoutMs: 180000 });
       let resolvedDocumentId = res?.document_id || null;
       if (!resolvedDocumentId) {
         const latestDocs = await refreshSavedDocs();
@@ -2043,7 +2043,7 @@ export default function BlueprintPage() {
                   document_id: null,
                   sections: sectionsForDoc(selectedDoc).map((s) => s.id),
                 },
-                { timeoutMs: 900000 }
+                { timeoutMs: 180000 }
               );
               const draftsMarkdown = resDrafts?.document_markdown || "";
               if (draftsMarkdown) {
@@ -2214,7 +2214,7 @@ export default function BlueprintPage() {
         followup_sequence: followupChoice === "Other" ? followupCustom : followupChoice,
         sections: chosen,
         word_count: selectedDoc === "sales_letter" ? Number(wordCount) || null : null
-      }, { timeoutMs: 900000 });
+      }, { timeoutMs: 180000 });
       const markdown = res?.document_markdown || "";
       setSectionDraftsByDoc((prev) => ({
         ...prev,

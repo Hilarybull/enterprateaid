@@ -459,6 +459,24 @@ def _load_uk_sic_2007() -> List[UkSicCode]:
     return unique
 
 
+# Common connector/filler words. Left in q_tokens, these matched against every
+# SIC title built from the template "Retail sale of X ... in specialised stores"
+# (dozens of entries in the 47.xx range alone) — a long free-text business
+# description (e.g. the full "About your business" paragraph, not a short
+# keyword) would rack up +10 for "of", "and", "in", "for" against practically
+# every retail-category title, drowning out any real keyword match and
+# returning essentially-random retail codes with zero topical relevance. This
+# is the actual bug behind SIC suggestions like "meat retail" / "paint and
+# varnish manufacture" for an AI health & wellness business: the query had no
+# real matching tokens, but plenty of stopword noise scored positively anyway.
+_SIC_SEARCH_STOPWORDS = frozenset({
+    "a", "an", "the", "of", "and", "or", "in", "on", "at", "to", "for", "with",
+    "is", "are", "was", "were", "be", "been", "being", "it", "its", "as", "by",
+    "we", "our", "us", "you", "your", "that", "this", "these", "those", "who",
+    "which", "will", "can", "not", "into", "than", "so", "if", "but", "also",
+})
+
+
 def uk_sic_search(*, query: str, limit: int = 6) -> List[UkSicCode]:
     """
     Deterministic SIC search over the official UK SIC 2007 dataset (ONS).
@@ -471,7 +489,10 @@ def uk_sic_search(*, query: str, limit: int = 6) -> List[UkSicCode]:
     codes = _load_uk_sic_2007()
 
     q_lower = q.lower()
-    q_tokens = [t for t in re.findall(r"[a-z0-9]+", q_lower) if len(t) >= 2]
+    q_tokens = [
+        t for t in re.findall(r"[a-z0-9]+", q_lower)
+        if len(t) >= 3 and t not in _SIC_SEARCH_STOPWORDS
+    ]
     q_digits = re.sub(r"\D+", "", q)
 
     def score(item: UkSicCode) -> int:

@@ -43,7 +43,7 @@ PROVIDERS: dict[str, dict] = {
     "stripe":     {"label": "Stripe",     "group": "financial"},
 }
 
-INTEGRATIONS_MIN_PLAN = "decision_engine"
+INTEGRATIONS_MIN_PLAN = "starter_insight"
 PLAN_ORDER = ("explorer", "starter_insight", "decision_engine", "growth_navigator", "strategic_business_os")
 PLAN_RANK = {plan: index for index, plan in enumerate(PLAN_ORDER)}
 
@@ -77,7 +77,7 @@ async def _user_meets_integration_plan(user_id: str) -> bool:
 
 async def _require_integration_plan(user_id: str) -> None:
     if not await _user_meets_integration_plan(user_id):
-        raise HTTPException(status_code=403, detail="Integrations are available on the Decision Engine plan only.")
+        raise HTTPException(status_code=403, detail="Integrations are available on the Starter plan and above.")
 
 
 def _backend_url() -> str:

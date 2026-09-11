@@ -28,8 +28,16 @@ export async function apiRequest(path, method, body, options) {
     if (e && typeof e === "object" && e.name === "AbortError") {
       throw new Error("Request timed out. Please try again.");
     }
-    // Network error (backend down, wrong port, CORS, etc.)
-    throw new Error("NETWORK_ERROR");
+    // Network error (backend down, wrong port, CORS, etc.). This used to throw a
+    // bare "NETWORK_ERROR" sentinel string that every one of the ~60 call sites
+    // across the app was expected to translate before displaying — most didn't,
+    // so the literal string "NETWORK_ERROR" routinely leaked straight into the UI
+    // (e.g. the Referrals page, the Simulation page). The message is now
+    // human-readable by default; `.code` still carries the machine-readable
+    // sentinel for the handful of callers that branch on it explicitly.
+    const err = new Error("Couldn't reach the server. Check your connection and try again.");
+    err.code = "NETWORK_ERROR";
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }

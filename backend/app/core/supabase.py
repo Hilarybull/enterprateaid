@@ -128,6 +128,17 @@ async def sb_update(
     return await anyio.to_thread.run_sync(lambda: _run_with_retry(_run))
 
 
+async def sb_rpc(fn_name: str, params: dict[str, Any]) -> Any:
+    """Call a Postgres stored function (via PostgREST RPC), with the same
+    transient-error retry as every other sb_* helper."""
+    def _run():
+        client = get_supabase_client()
+        res = client.rpc(fn_name, params).execute()
+        return res.data
+
+    return await anyio.to_thread.run_sync(lambda: _run_with_retry(_run))
+
+
 async def sb_delete(
     table: str,
     *,

@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useEffect } from "react";
 import { DemoTourProvider } from "./context/DemoTourContext";
 import DemoTour from "./components/DemoTour";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -82,6 +83,7 @@ export default function App() {
   return (
     <DemoTourProvider>
       <ScrollToTop />
+      <ErrorBoundary>
       <Routes>
       <Route path="/" element={<PublicRoot />} />
       <Route path="/home" element={<NewLandingPage />} />
@@ -140,6 +142,7 @@ export default function App() {
       <Route path="/marketplace/request/:requestId" element={<ProposalRequestDetailPage />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
+    </ErrorBoundary>
     <DemoTour />
     <CookieBanner />
     </DemoTourProvider>

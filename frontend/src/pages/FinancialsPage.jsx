@@ -1540,7 +1540,7 @@ ${contractList !== null ? section("Contracts","Active contracts and their value.
     } catch (e) {
       setShareNotice(null);
       const raw = (e instanceof Error ? e.message : "") || "";
-      if (raw === "NETWORK_ERROR") {
+      if (e?.code === "NETWORK_ERROR" || raw === "NETWORK_ERROR") {
         setError("Cannot reach the server to create a share link. Check that the backend is running, then try again.");
       } else {
         const clean = raw.replace(/^HTTP \d+:\s*/i, "");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -103,6 +104,15 @@ def _resolved_document_html(document_html: str | None, document_markdown: str | 
 _FREE_PLAN_KEYS = {"free_trial", "explorer", "expired", ""}
 _LIFETIME_BLUEPRINT_LIMIT = 1
 
+# Hard server-side ceiling on a single generation. Without this, a stuck/slow LLM
+# call ran forever: the client would eventually give up (or the user would just
+# close the tab) while the backend kept working in the background, credits still
+# got committed on eventual completion, and the document could still get saved
+# minutes after the user was shown a failure. Bounding it here means a stuck
+# generation now fails fast and reliably, and credit_guard's existing
+# finally-block releases the reserved credits instead of committing them.
+_GENERATION_TIMEOUT_SECONDS = 150
+
 
 def _blueprint_feature_code(doc_type: str, sections: list[str] | None) -> str:
     is_section = bool(sections and len(sections) == 1)
@@ -137,11 +147,23 @@ async def blueprint_generate(
     logger.info("blueprint-generate start user=%s type=%s", user_id, payload.type)
     try:
         async with credit_guard(user_id, feature_code, payload.generation_id):
-            result = await generate_blueprint(payload, user_id=user_id)
+            result = await asyncio.wait_for(
+                generate_blueprint(payload, user_id=user_id),
+                timeout=_GENERATION_TIMEOUT_SECONDS,
+            )
         logger.info("blueprint-generate complete user=%s type=%s", user_id, payload.type)
         return result
     except HTTPException:
         raise
+    except asyncio.TimeoutError as exc:
+        logger.error(
+            "blueprint-generate TIMEOUT user=%s type=%s after %ss",
+            user_id, payload.type, _GENERATION_TIMEOUT_SECONDS,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Generation timed out. Your credits were not charged — please try again.",
+        ) from exc
     except Exception as exc:
         logger.exception("blueprint-generate UNHANDLED ERROR user=%s type=%s: %s", user_id, payload.type, exc)
         raise HTTPException(

@@ -144,6 +144,50 @@ export default function RegistrationWizard() {
     };
   }, [altName1, altName2, businessDescription, companyName, ideaValidation, registeredAddress, workspaceId]);
 
+  function buildPatchPayload() {
+    return {
+      name: companyName.trim() || undefined,
+      data: {
+        business_profile: {
+          business_name: companyName.trim(),
+          primary_industry: ideaValidation?.context?.primary_industry || "",
+          business_type: ideaValidation?.context?.business_type || ""
+        },
+        workspace_profile: {
+          company_name: companyName.trim(),
+          about_company: businessDescription.trim()
+        },
+        registration: {
+          company_name: companyName.trim(),
+          alt_name_1: altName1.trim(),
+          alt_name_2: altName2.trim(),
+          business_description: businessDescription.trim(),
+          entity_type: selectedEntityKey,
+          registered_address: registeredAddress.trim(),
+          address_type: addressType,
+          sic_codes: sicSelected
+        },
+        registration_status: {
+          status: registrationStatus,
+          registration_number: registrationNumber.trim(),
+          registration_date: registrationDate,
+          notes: registrationNotes.trim(),
+          checked_company_name: registrationCheckName.trim()
+        }
+      }
+    };
+  }
+
+  async function saveNow() {
+    if (!workspaceId) return null;
+    const ws = await apiRequest(`/validation/${workspaceId}`, "PATCH", buildPatchPayload());
+    if (ws?.id) {
+      setWorkspaceId(ws.id);
+      if (ws?.name) setWorkspaceName(ws.name);
+    }
+    return ws;
+  }
+
   useEffect(() => {
     const hasAny =
       companyName.trim() ||
@@ -152,46 +196,10 @@ export default function RegistrationWizard() {
       altName1.trim() ||
       altName2.trim();
     if (!hasAny || !workspaceId) return;
-    const timer = setTimeout(async () => {
-      try {
-        const ws = await apiRequest(`/validation/${workspaceId}`, "PATCH", {
-          name: companyName.trim() || undefined,
-          data: {
-            business_profile: {
-              business_name: companyName.trim(),
-              primary_industry: ideaValidation?.context?.primary_industry || "",
-              business_type: ideaValidation?.context?.business_type || ""
-            },
-            workspace_profile: {
-              company_name: companyName.trim(),
-              about_company: businessDescription.trim()
-            },
-            registration: {
-              company_name: companyName.trim(),
-              alt_name_1: altName1.trim(),
-              alt_name_2: altName2.trim(),
-              business_description: businessDescription.trim(),
-              entity_type: selectedEntityKey,
-              registered_address: registeredAddress.trim(),
-              address_type: addressType,
-              sic_codes: sicSelected
-            },
-            registration_status: {
-              status: registrationStatus,
-              registration_number: registrationNumber.trim(),
-              registration_date: registrationDate,
-              notes: registrationNotes.trim(),
-              checked_company_name: registrationCheckName.trim()
-            }
-          }
-        });
-        if (ws?.id) {
-          setWorkspaceId(ws.id);
-          if (ws?.name) setWorkspaceName(ws.name);
-        }
-      } catch {
-        // ignore
-      }
+    const timer = setTimeout(() => {
+      saveNow().catch(() => {
+        // ignore — this is a background autosave, the debounce will retry on the next edit
+      });
     }, 600);
     return () => clearTimeout(timer);
   }, [
@@ -321,12 +329,38 @@ export default function RegistrationWizard() {
     setDirectors((prev) => prev.map((d, i) => (i === idx ? { ...d, [key]: value } : d)));
   }
 
+  const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState(null);
+  const [finished, setFinished] = useState(false);
+
   function goNext() {
+    if (stepIndex === REG_STEPS.length - 1) {
+      finishRegistration();
+      return;
+    }
     setStepIndex((i) => Math.min(REG_STEPS.length - 1, i + 1));
   }
 
   function goBack() {
     setStepIndex((i) => Math.max(0, i - 1));
+  }
+
+  async function finishRegistration() {
+    // Previously a no-op: on the last step, "Finish" just clamped stepIndex to
+    // itself (Math.min(REG_STEPS.length - 1, i + 1)) and did nothing else — no
+    // save, no confirmation, no next action. This is a prep guide (see the note
+    // above the wizard), so there's nothing to submit to Companies House; "Finish"
+    // should guarantee everything is saved and confirm that clearly.
+    setFinishing(true);
+    setFinishError(null);
+    try {
+      await saveNow();
+      setFinished(true);
+    } catch (e) {
+      setFinishError(e instanceof Error ? e.message : "Couldn't save your registration details. Please try again.");
+    } finally {
+      setFinishing(false);
+    }
   }
 
   const summary = useMemo(() => {
@@ -503,10 +537,24 @@ export default function RegistrationWizard() {
               <Button variant="secondary" disabled={stepIndex === 0} onClick={goBack}>
                 Back
               </Button>
-              <Button disabled={disableNext} onClick={goNext}>
+              <Button disabled={disableNext || finishing} onClick={goNext}>
+                {finishing ? <Spinner size={16} /> : null}
                 {stepIndex === REG_STEPS.length - 1 ? "Finish" : "Next"}
               </Button>
             </div>
+
+            {stepIndex === REG_STEPS.length - 1 && finished ? (
+              <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-800">
+                Saved. Your registration details are ready — head to{" "}
+                <a href={companiesHouseLink} target="_blank" rel="noreferrer" className="underline">
+                  Companies House
+                </a>{" "}
+                to complete the official registration.
+              </div>
+            ) : null}
+            {stepIndex === REG_STEPS.length - 1 && finishError ? (
+              <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-800">{finishError}</div>
+            ) : null}
 
             {disableNext && step.key === "activity" ? (
               <div className="mt-2 text-xs font-semibold text-slate-500">Select exactly 4 SIC codes to continue.</div>

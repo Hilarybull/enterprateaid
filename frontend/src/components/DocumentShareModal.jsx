@@ -108,7 +108,7 @@ export default function DocumentShareModal({
       });
     } catch (e) {
       const raw = (e instanceof Error ? e.message : "") || "";
-      if (raw === "NETWORK_ERROR") {
+      if (e?.code === "NETWORK_ERROR" || raw === "NETWORK_ERROR") {
         setError("Unable to reach the server. Please check your connection and try again.");
       } else {
         const clean = raw.replace(/^HTTP \d+:\s*/i, "");

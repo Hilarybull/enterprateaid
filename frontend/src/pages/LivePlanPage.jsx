@@ -136,7 +136,7 @@ export default function BusinessPlanPage() {
       } else {
         if (message.includes("FEATURE_NOT_ENTITLED")) {
           if (!hasBlueprintGrant) setError("Upgrade to the Decision Engine plan to create a live business plan.");
-        } else if (message.includes("NETWORK_ERROR")) {
+        } else if (err?.code === "NETWORK_ERROR" || message.includes("NETWORK_ERROR")) {
           setError("Network error - please try again.");
         } else {
           setError(message.replace(/^HTTP \d+:\s*/, ""));
@@ -170,7 +170,7 @@ export default function BusinessPlanPage() {
       const message = String(err?.message || "");
       if (message.includes("FEATURE_NOT_ENTITLED")) {
         setError("Your account is not entitled to create a live business plan. Ask the admin to grant Blueprint access.");
-      } else if (message.includes("NETWORK_ERROR")) {
+      } else if (err?.code === "NETWORK_ERROR" || message.includes("NETWORK_ERROR")) {
         setError("Network error - please try again.");
       } else {
         setError(message.replace(/^HTTP \d+:\s*/, ""));

@@ -63,6 +63,15 @@ function MastercardLogo({ active }) {
   );
 }
 
+function StripeBadge({ className = "" }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] font-medium text-slate-400 dark:text-slate-500 ${className}`}>
+      Powered by
+      <span className="font-bold tracking-tight text-[#635bff]">Stripe</span>
+    </span>
+  );
+}
+
 function VerveLogo({ active }) {
   return (
     <div
@@ -158,13 +167,18 @@ function StripeCardForm({ plan, billing, onSwitchToBank, onNetworkError }) {
             "Payment failed. Please check your card details."
         );
       } else {
-        // Eagerly activate the subscription in our DB without waiting for the webhook
+        // Eagerly activate the subscription in our DB without waiting for the webhook.
+        // Non-fatal if it fails here (e.g. Stripe's subscription object hasn't caught
+        // up to "active" yet) — the card has already been charged either way, so we
+        // still go to the success page, which retries activation itself using the
+        // subscription_id below instead of silently declaring success with nothing
+        // actually granted.
         try {
           await apiRequest("/plans/activate-subscription", "POST", { subscription_id: res.subscription_id });
         } catch (_) {
-          // Non-fatal — webhook will handle it if this fails
+          // handled by the retry on the success page
         }
-        window.location.href = "/pricing/success";
+        window.location.href = `/pricing/success?subscription_id=${encodeURIComponent(res.subscription_id)}`;
       }
     } catch (err) {
       const msg = (err instanceof Error ? err.message : String(err)).replace(
@@ -207,7 +221,7 @@ function StripeCardForm({ plan, billing, onSwitchToBank, onNetworkError }) {
         /* Verve path */
         <div className="rounded-lg border border-[#007B41]/20 bg-[#007B41]/5 p-3 space-y-2.5">
           <p className="text-[12px] text-slate-600 dark:text-slate-400 leading-relaxed">
-            Verve cards work via bank transfer — we'll send you payment details
+            Verve cards work via bank transfer. We'll send you payment details
             and confirm your plan instantly once received.
           </p>
           <button
@@ -527,6 +541,19 @@ function PaymentModal({ plan, billing, onClose }) {
         </div>
 
         <div className="p-5 space-y-3">
+          <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] leading-relaxed text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+            <svg className="mt-0.5 h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 9v4M12 17h.01" />
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            </svg>
+            <span>
+              This is a recurring subscription. Your card is saved and billed{" "}
+              <strong>{billing === BILLING.annual ? "annually" : "every month"}</strong> automatically until you
+              cancel. If a renewal payment fails, your plan will be downgraded and paid features will stop
+              working.
+            </span>
+          </div>
+
           <p className="text-[13px] font-medium text-slate-500 dark:text-slate-400">
             Choose a payment method
           </p>
@@ -564,6 +591,7 @@ function PaymentModal({ plan, billing, onClose }) {
                 <div className="text-[12px] text-slate-500 dark:text-slate-400">
                   Visa · Mastercard · Verve
                 </div>
+                <StripeBadge className="mt-1" />
               </div>
               <svg
                 className={
@@ -762,24 +790,32 @@ function PaymentModal({ plan, billing, onClose }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-center gap-1.5 border-t border-slate-100 px-5 py-3 text-[12px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
-          <svg
-            className="h-3.5 w-3.5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <rect x="3" y="11" width="18" height="11" rx="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-          Secure · Cancel anytime · Questions?{" "}
-          <a
-            href={`mailto:${SUPPORT_EMAIL}`}
-            className="font-medium text-brand-600 hover:underline dark:text-brand-400"
-          >
-            {SUPPORT_EMAIL}
-          </a>
+        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1.5 border-t border-slate-100 px-5 py-3 text-center text-[12px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
+          <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <svg
+              className="h-3.5 w-3.5 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <rect x="3" y="11" width="18" height="11" rx="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            Payments secured by <span className="font-bold tracking-tight text-[#635bff]">Stripe</span>
+          </span>
+          <span className="hidden sm:inline text-slate-300 dark:text-slate-600">·</span>
+          <span className="whitespace-nowrap">Cancel anytime</span>
+          <span className="hidden sm:inline text-slate-300 dark:text-slate-600">·</span>
+          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+            Questions?
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="font-medium text-brand-600 hover:underline dark:text-brand-400"
+            >
+              {SUPPORT_EMAIL}
+            </a>
+          </span>
         </div>
       </div>
     </div>
@@ -1154,7 +1190,8 @@ export default function PricingPage() {
             <rect x="3" y="11" width="18" height="11" rx="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
-          Visa · Mastercard · Verve · PayPal · Bank Transfer · Cancel anytime
+          Visa · Mastercard · Verve · PayPal · Bank Transfer · Cancel anytime · Payments by{" "}
+          <span className="font-bold tracking-tight text-[#635bff]">Stripe</span>
         </div>
 
         <div className="mt-12 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">

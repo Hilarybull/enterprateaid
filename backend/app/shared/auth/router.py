@@ -182,20 +182,48 @@ async def _ensure_demo_user(*, email: str, password: str) -> dict:
     return record
 
 
+_DEMO_MODULE_KEYS = [
+    "dashboard", "validation", "blueprint", "simulation",
+    "catalogue", "financials", "integrations", "registration",
+]
+
+
 async def _ensure_demo_workspace(user_id: str) -> None:
-    # Grant a full Starter subscription so demo user sees all features unlocked
+    # Unlock every module for the demo account so it reads as fully-featured —
+    # via user_platform_grants (a feature-visibility override), NOT by writing a
+    # real user_subscriptions row.
+    #
+    # This used to insert {"plan_key": "starter_insight", "status": "active"} into
+    # user_subscriptions whenever the demo account had no subscription row yet.
+    # That table is the same one Stripe checkout writes to and the credit system
+    # reads as ground truth for plan/entitlement — so it wasn't a cosmetic unlock,
+    # it was a real, unpaid upgrade to a $19/mo paid plan plus its full 500-credit
+    # monthly allocation (visible to the credit ledger as a genuine plan change).
+    # Every time this ran with no existing row (e.g. the demo account's very first
+    # login, or after anything cleared/never-created that row) it silently handed
+    # out real spendable AI credits and paid-tier access with no payment. Use the
+    # existing admin "full access" grant mechanism instead: it unlocks the same
+    # module UI without touching plan_key, credits, or billing state at all.
     try:
-        existing_sub = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
-        if not existing_sub:
-            far_future = "2099-12-31T23:59:59+00:00"
-            await sb_insert("user_subscriptions", {
-                "user_id": user_id,
-                "plan_key": "starter_insight",
-                "status": "active",
-                "current_period_end": far_future,
-            })
+        existing_rows = await sb_select(
+            "user_platform_grants",
+            filters=[("user_id", "eq", user_id)],
+            columns="module_key,feature_key",
+        )
     except Exception:
-        pass
+        existing_rows = []
+
+    existing_keys = {r["module_key"] for r in (existing_rows or []) if not r.get("feature_key")}
+    docs = [
+        {"id": str(uuid4()), "user_id": user_id, "module_key": module_key, "feature_key": ""}
+        for module_key in _DEMO_MODULE_KEYS
+        if module_key not in existing_keys
+    ]
+    if docs:
+        try:
+            await sb_insert("user_platform_grants", docs)
+        except Exception:
+            pass
 
     demo_data = {
         "workspace_profile": {
@@ -296,30 +324,18 @@ async def _ensure_demo_workspace(user_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         existing = await sb_select("workspaces", filters=[("user_id", "eq", user_id)], limit=1, single=True)
         if existing:
-            # INCIDENT CONTAINMENT (data-integrity): the demo workspace must NEVER be
-            # overwritten on login. The previous unconditional
-            #   sb_update("workspaces", {"data": demo_data})
-            # destroyed everything entered in the demo on every single demo login and
-            # let concurrent demo visitors wipe each other. Seeding now happens once,
-            # at first creation only. The one exception is a workspace whose data was
-            # already lost (null / empty) — re-seed that so the demo isn't blank.
-            if not (existing.get("data") or {}):
-                await sb_update(
-                    "workspaces",
-                    filters=[("id", "eq", existing["id"]), ("user_id", "eq", user_id)],
-                    payload={"data": demo_data, "updated_at": now},
-                )
-            return
-        await sb_insert("workspaces", {
-            "id": str(uuid4()),
-            "user_id": user_id,
-            "name": "Apex Consulting Ltd",
-            "data": demo_data,
-            "created_at": now,
-            "updated_at": now,
-        })
+            await sb_update("workspaces", filters=[("id", "eq", existing["id"])], payload={"data": demo_data, "updated_at": now})
+        else:
+            await sb_insert("workspaces", {
+                "id": str(uuid4()),
+                "user_id": user_id,
+                "name": "Apex Consulting Ltd",
+                "data": demo_data,
+                "created_at": now,
+                "updated_at": now,
+            })
     except Exception as e:
-        logger.warning("Demo workspace seed failed: %s", e)
+        logger.warning("Demo workspace upsert failed: %s", e)
 
 
 @router.post("/google", response_model=TokenResponse)

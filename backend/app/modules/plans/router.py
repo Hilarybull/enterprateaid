@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone, timedelta
@@ -249,15 +250,29 @@ async def activate_subscription(
     customer_id: str | None = None
 
     if subscription_id:
-        try:
-            stripe_sub = client.subscriptions.retrieve(subscription_id)
-            meta = getattr(stripe_sub, "metadata", {}) or {}
-            plan_key = meta.get("plan_key")
-            billing_period = meta.get("billing_period", "monthly")
-            customer_id = getattr(stripe_sub, "customer", None)
-        except Exception as e:
-            logger.error("activate_subscription: retrieve sub failed: %s", e)
-            raise HTTPException(status_code=400, detail="Could not verify subscription with Stripe.")
+        # Right after stripe.confirmCardPayment() resolves on the client, the
+        # subscription object Stripe returns via the API can briefly still read
+        # "incomplete" — Stripe's own transition to "active" lags the payment
+        # confirmation by a beat. Retrying a few times before giving up avoids
+        # treating a real, successful payment as a failed activation (which
+        # previously meant no credits and no plan change even though Stripe had
+        # already charged the card).
+        last_status: str | None = None
+        for attempt in range(4):
+            try:
+                stripe_sub = client.subscriptions.retrieve(subscription_id)
+            except Exception as e:
+                logger.error("activate_subscription: retrieve sub failed: %s", e)
+                raise HTTPException(status_code=400, detail="Could not verify subscription with Stripe.")
+            last_status = getattr(stripe_sub, "status", None)
+            if last_status in ("active", "trialing"):
+                break
+            if attempt < 3:
+                await asyncio.sleep(0.75 * (attempt + 1))
+        meta = getattr(stripe_sub, "metadata", {}) or {}
+        plan_key = meta.get("plan_key")
+        billing_period = meta.get("billing_period", "monthly")
+        customer_id = getattr(stripe_sub, "customer", None)
 
     elif session_id:
         try:
@@ -292,6 +307,25 @@ async def activate_subscription(
     period_start = datetime.fromtimestamp(ps, tz=timezone.utc).isoformat() if ps else now.isoformat()
     period_end = datetime.fromtimestamp(pe, tz=timezone.utc).isoformat() if pe else (now + timedelta(days=30 if billing_period == "monthly" else 365)).isoformat()
 
+    # Credit provisioning previously lived ONLY in the Stripe webhook handler
+    # below (checkout.session.completed / invoice.paid) — this eager path wrote
+    # the new plan_key to user_subscriptions but never granted the plan's
+    # credits. That's fine as long as a webhook is registered in the Stripe
+    # dashboard and STRIPE_WEBHOOK_SECRET is set; if either isn't (as found
+    # while investigating this), the webhook never fires and a paying user's
+    # credit balance never moves even though the payment succeeded and the
+    # plan badge updates. Decide here — before overwriting the row — whether
+    # this is a genuinely new activation for this Stripe subscription, so a
+    # retried/duplicate call (or a webhook firing later for the same
+    # subscription) can't grant credits twice.
+    existing = await sb_select("user_subscriptions", filters=[("user_id", "eq", user["id"])], single=True)
+    already_activated = bool(
+        existing
+        and existing.get("status") == "active"
+        and subscription_id
+        and existing.get("stripe_subscription_id") == subscription_id
+    )
+
     await sb_upsert(
         "user_subscriptions",
         payload={
@@ -307,7 +341,23 @@ async def activate_subscription(
         },
         on_conflict="user_id",
     )
-    return {"activated": True, "plan_key": plan_key, "billing_period": billing_period, "period_end": period_end}
+
+    credits_granted = False
+    if not already_activated:
+        try:
+            await provision_plan_credits(user["id"], plan_key, reason=f"{plan_key} subscription credit allocation")
+            credits_granted = True
+            logger.info("Provisioned credits for user %s plan %s on activate-subscription", user["id"], plan_key)
+        except Exception as e:
+            logger.error("Failed to provision credits on activate-subscription for user %s: %s", user["id"], e)
+
+    return {
+        "activated": True,
+        "plan_key": plan_key,
+        "billing_period": billing_period,
+        "period_end": period_end,
+        "credits_granted": credits_granted,
+    }
 
 
 # ── Authenticated: Stripe checkout ───────────────────────────────────────────
@@ -467,6 +517,19 @@ async def stripe_webhook(request: Request):
                         period_end = datetime.fromtimestamp(pe, tz=timezone.utc).isoformat()
                 except Exception:
                     pass
+
+            # Same idempotency guard as /activate-subscription's eager path: if
+            # that already ran for this exact Stripe subscription (the common
+            # case — the frontend calls it right after payment, this webhook is
+            # a slower backup), don't grant the plan's credits a second time.
+            existing = await sb_select("user_subscriptions", filters=[("user_id", "eq", user_id)], single=True)
+            already_activated = bool(
+                existing
+                and existing.get("status") == "active"
+                and sub_id
+                and existing.get("stripe_subscription_id") == sub_id
+            )
+
             await sb_upsert(
                 "user_subscriptions",
                 payload={
@@ -483,11 +546,12 @@ async def stripe_webhook(request: Request):
                 on_conflict="user_id",
             )
             # Issue initial credits for new subscription
-            try:
-                await provision_plan_credits(user_id, plan_key, reason=f"{plan_key} initial subscription credit allocation")
-                logger.info("Provisioned credits for user %s plan %s on checkout", user_id, plan_key)
-            except Exception as e:
-                logger.error("Failed to provision credits on checkout for user %s: %s", user_id, e)
+            if not already_activated:
+                try:
+                    await provision_plan_credits(user_id, plan_key, reason=f"{plan_key} initial subscription credit allocation")
+                    logger.info("Provisioned credits for user %s plan %s on checkout", user_id, plan_key)
+                except Exception as e:
+                    logger.error("Failed to provision credits on checkout for user %s: %s", user_id, e)
 
             # Create referral reward for initial subscription payment
             try:
