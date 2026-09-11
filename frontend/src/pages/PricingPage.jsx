@@ -108,7 +108,7 @@ const ELEM_STYLE = {
   },
 };
 
-function StripeCardForm({ plan, billing, onSwitchToBank, onNetworkError }) {
+function StripeCardForm({ plan, billing, onNetworkError }) {
   const stripe = useStripe();
   const elements = useElements();
   const [brand, setBrand] = useState("unknown");
@@ -187,7 +187,7 @@ function StripeCardForm({ plan, billing, onSwitchToBank, onNetworkError }) {
       );
       if (msg.includes("503") || msg.includes("not configured")) {
         setError(
-          "Card payments are being set up. Please use bank transfer for now."
+          `Card payments are being set up for this plan. Contact ${SUPPORT_EMAIL} to subscribe.`
         );
       } else {
         setError(msg || "Payment failed. Please try again.");
@@ -221,18 +221,18 @@ function StripeCardForm({ plan, billing, onSwitchToBank, onNetworkError }) {
         /* Verve path */
         <div className="rounded-lg border border-[#007B41]/20 bg-[#007B41]/5 p-3 space-y-2.5">
           <p className="text-[12px] text-slate-600 dark:text-slate-400 leading-relaxed">
-            Verve cards work via bank transfer. We'll send you payment details
-            and confirm your plan instantly once received.
+            Enter your Verve card details below as usual. If it's declined, contact{" "}
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-[#007B41] hover:underline">
+              {SUPPORT_EMAIL}
+            </a>{" "}
+            and we'll get your plan activated another way.
           </p>
           <button
             type="button"
-            onClick={() => {
-              setIsVerve(false);
-              if (onSwitchToBank) onSwitchToBank();
-            }}
+            onClick={() => setIsVerve(false)}
             className="w-full rounded-xl border-2 border-[#007B41] py-2 text-sm font-semibold text-[#007B41] hover:bg-[#007B41] hover:text-white transition"
           >
-            Switch to Bank Transfer
+            Continue with card details
           </button>
         </div>
       ) : (
@@ -389,7 +389,7 @@ function CheckoutFallback({ plan, billing }) {
       const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
       setError(
         msg.includes("503") || msg.includes("not configured")
-          ? "Card payments are being set up. Please use bank transfer for now."
+          ? `Card payments are being set up for this plan. Contact ${SUPPORT_EMAIL} to subscribe.`
           : (e instanceof Error ? e.message : String(e)).replace(/^HTTP \d+:\s*/, "") ||
             "Something went wrong."
       );
@@ -459,11 +459,8 @@ function CheckIcon() {
 // ── Payment options modal ─────────────────────────────────────────────────────
 
 function PaymentModal({ plan, billing, onClose }) {
-  const [method, setMethod] = useState(null); // null | 'card' | 'paypal' | 'bank'
+  const [method, setMethod] = useState(null); // null | 'card' | 'paypal'
   const [elementsAvailable, setElementsAvailable] = useState(true);
-  const [bankEmail, setBankEmail] = useState("");
-  const [bankSent, setBankSent] = useState(false);
-  const [bankSending, setBankSending] = useState(false);
 
   const price = billing === BILLING.annual ? plan.annualPrice : plan.monthlyPrice;
   const billingLabel =
@@ -482,28 +479,6 @@ function PaymentModal({ plan, billing, onClose }) {
       `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`,
       "_blank"
     );
-  }
-
-  async function handleBankSubmit(e) {
-    e.preventDefault();
-    if (!bankEmail.trim()) return;
-    setBankSending(true);
-    try {
-      await apiRequest("/plans/waitlist", "POST", {
-        email: bankEmail.trim(),
-        plan_key: plan.key,
-        billing_period: billing,
-      });
-    } catch {
-      // Non-fatal
-    } finally {
-      setBankSent(true);
-      setBankSending(false);
-    }
-  }
-
-  function switchToBank() {
-    setMethod("bank");
   }
 
   return (
@@ -613,7 +588,6 @@ function PaymentModal({ plan, billing, onClose }) {
                     <StripeCardForm
                       plan={plan}
                       billing={billing}
-                      onSwitchToBank={switchToBank}
                       onNetworkError={() => setElementsAvailable(false)}
                     />
                   </Elements>
@@ -684,107 +658,6 @@ function PaymentModal({ plan, billing, onClose }) {
                 >
                   Request PayPal invoice
                 </button>
-              </div>
-            )}
-          </div>
-
-          {/* ── Bank Transfer ── */}
-          <div
-            className={
-              "rounded-xl border transition " +
-              (method === "bank"
-                ? "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-900/10"
-                : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-slate-600")
-            }
-          >
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 p-4 text-left"
-              onClick={() => setMethod(method === "bank" ? null : "bank")}
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
-                <svg
-                  className="h-5 w-5 text-slate-700 dark:text-slate-300"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                >
-                  <path d="M3 9l9-6 9 6" />
-                  <path d="M5 9v9M19 9v9M3 18h18" />
-                  <path d="M9 9v9M15 9v9" />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Bank Transfer
-                </div>
-                <div className="text-[12px] text-slate-500 dark:text-slate-400">
-                  BACS · Faster Payments · Also for Verve
-                </div>
-              </div>
-              <svg
-                className={
-                  "h-4 w-4 shrink-0 text-slate-400 transition-transform " +
-                  (method === "bank" ? "rotate-180" : "")
-                }
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {method === "bank" && (
-              <div className="border-t border-slate-100 px-4 pb-4 pt-3 dark:border-slate-700">
-                {bankSent ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2.5 dark:bg-emerald-900/20">
-                    <svg
-                      className="h-4 w-4 shrink-0 text-emerald-600"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    <p className="text-[13px] font-medium text-emerald-700 dark:text-emerald-400">
-                      Request received! We'll email bank details and an invoice
-                      shortly.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <p className="mb-3 text-[13px] text-slate-500 dark:text-slate-400">
-                      Enter your email and we'll send bank details + an invoice
-                      for{" "}
-                      <strong className="text-slate-700 dark:text-slate-300">
-                        {billingLabel}
-                      </strong>
-                      .
-                    </p>
-                    <form onSubmit={handleBankSubmit} className="space-y-2">
-                      <input
-                        type="email"
-                        required
-                        placeholder="your@email.com"
-                        value={bankEmail}
-                        onChange={(e) => setBankEmail(e.target.value)}
-                        className="ea-input"
-                      />
-                      <button
-                        type="submit"
-                        disabled={bankSending}
-                        className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
-                      >
-                        {bankSending ? "Sending…" : "Request invoice"}
-                      </button>
-                    </form>
-                  </>
-                )}
               </div>
             )}
           </div>
@@ -1190,7 +1063,7 @@ export default function PricingPage() {
             <rect x="3" y="11" width="18" height="11" rx="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
-          Visa · Mastercard · Verve · PayPal · Bank Transfer · Cancel anytime · Payments by{" "}
+          Visa · Mastercard · Verve · PayPal · Cancel anytime · Payments by{" "}
           <span className="font-bold tracking-tight text-[#635bff]">Stripe</span>
         </div>
 
