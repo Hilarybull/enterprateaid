@@ -88,6 +88,11 @@ async def invite_request(request_id: str, payload: RequestInviteIn, user=Depends
     )
 
 
+@router.get("/requests/{request_id}/viewers")
+async def request_viewers(request_id: str, user=Depends(get_current_user)):
+    return await service.list_request_viewers(user_id=user["id"], request_id=request_id)
+
+
 # ── Public request discovery (proposer) ──────────────────────────────────
 @router.get("/public/requests")
 async def public_requests(

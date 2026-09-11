@@ -574,6 +574,36 @@ async def get_public_request(*, request_id: str, user_id: str | None, viewer_key
     return out
 
 
+async def list_request_viewers(*, user_id: str, request_id: str) -> dict:
+    """Owner-only: who viewed this request. Resolves signed-in viewers to the
+    company name on their workspace; anonymous/IP-only viewers can't be
+    identified beyond "Anonymous visitor" — that's the same honest limit as
+    the view count itself (see record_proposal_request_view)."""
+    await _get_own_request(user_id, request_id)  # raises 404 if not the owner
+    rows = await sb_select(
+        "proposal_request_views",
+        filters=[("request_id", "eq", request_id)],
+        order="first_viewed_at",
+        desc=True,
+    )
+    items = []
+    for r in (rows or []):
+        key = str(r.get("viewer_key") or "")
+        label = "Anonymous visitor"
+        if key.startswith("user:"):
+            viewer_user_id = key[len("user:"):]
+            try:
+                ws = await sb_select(
+                    "workspaces", filters=[("user_id", "eq", viewer_user_id)],
+                    order="updated_at", desc=True, limit=1, single=True,
+                )
+                label = _company_name(ws) if ws else "A registered visitor"
+            except Exception:
+                label = "A registered visitor"
+        items.append({"label": label, "viewed_at": r.get("first_viewed_at")})
+    return {"items": items, "total": len(items)}
+
+
 # ── Proposals: submission ─────────────────────────────────────────────────
 def _proposal_out(row: dict, *, viewer: str) -> dict:
     """viewer: 'recipient' | 'proposer' | 'public'"""

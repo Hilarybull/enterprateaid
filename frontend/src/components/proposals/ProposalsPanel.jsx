@@ -901,6 +901,9 @@ function RequestsTab({ openNewNonce = 0 }) {
   const [editing, setEditing] = useState(null); // request obj or "new" or null
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [inviteFor, setInviteFor] = useState(null);
+  const [viewersFor, setViewersFor] = useState(null);
+  const [viewers, setViewers] = useState(null);
+  const [viewersLoading, setViewersLoading] = useState(false);
   const [inviteEmails, setInviteEmails] = useState("");
   const [inviteResult, setInviteResult] = useState(null);
   const [rowError, setRowError] = useState(null);
@@ -961,6 +964,22 @@ function RequestsTab({ openNewNonce = 0 }) {
                     r.status === "DRAFT" && { label: "Publish", onClick: () => act(r.id, "publish") },
                     r.status === "PUBLISHED" && { label: "Copy link", onClick: () => copyLink(r.id) },
                     r.status === "PUBLISHED" && { label: "Invite proposers", onClick: () => { setInviteFor(r); setInviteEmails(""); setInviteResult(null); } },
+                    r.view_count > 0 && {
+                      label: "See who viewed",
+                      onClick: async () => {
+                        setViewersFor(r);
+                        setViewers(null);
+                        setViewersLoading(true);
+                        try {
+                          const res = await apiRequest(`/proposals/requests/${r.id}/viewers`, "GET");
+                          setViewers(res?.items || []);
+                        } catch {
+                          setViewers([]);
+                        } finally {
+                          setViewersLoading(false);
+                        }
+                      },
+                    },
                     r.status === "PUBLISHED" && { label: "Close request", onClick: () => act(r.id, "close") },
                     r.status === "CLOSED" && { label: "Reopen", onClick: () => act(r.id, "reopen") },
                     r.status !== "PUBLISHED" && { label: "Delete", onClick: () => setConfirmDelete(r), danger: true },
@@ -1028,6 +1047,34 @@ function RequestsTab({ openNewNonce = 0 }) {
               >
                 Send invites
               </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewersFor ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setViewersFor(null); }}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl dark:bg-slate-900">
+            <h3 className="mb-1 text-sm font-semibold text-slate-900 dark:text-slate-100">Who viewed “{viewersFor.title}”</h3>
+            <p className="mb-3 text-xs text-slate-500">
+              Signed-in visitors show their company name; anonymous visitors can't be identified further.
+            </p>
+            {viewersLoading ? (
+              <div className="flex justify-center py-6"><Spinner size={20} /></div>
+            ) : !viewers?.length ? (
+              <p className="py-4 text-center text-sm text-slate-500">No views yet.</p>
+            ) : (
+              <ul className="max-h-72 space-y-1.5 overflow-y-auto">
+                {viewers.map((v, i) => (
+                  <li key={i} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-800/60">
+                    <span className="min-w-0 truncate text-slate-700 dark:text-slate-200">{v.label}</span>
+                    <span className="shrink-0 text-xs text-slate-400">{fmtDate(v.viewed_at)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-3 flex justify-end">
+              <Button size="sm" variant="secondary" onClick={() => setViewersFor(null)}>Close</Button>
             </div>
           </div>
         </div>
